@@ -82,7 +82,7 @@ printf "│ ${YEL}(use d to confirm the selection above)${RST}\n\n"
 
 sec_open "Final confirmation"
 if [ "$FEAT_REPO" = 1 ]; then
-    sec_note "WARNING: $REPO_DIR will be DELETED (contains .env API keys and reminders.json)."
+    sec_note "WARNING: $REPO_DIR will be DELETED (contains .env API keys, reminders.json, memories.json, and the Spotify token cache)."
 fi
 printf "│ ${YEL}Type ${RST}${PUR}uninstall${RST}${YEL} to confirm removal:${RST} "
 read -r confirm || confirm=""

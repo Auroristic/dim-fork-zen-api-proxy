@@ -16,6 +16,7 @@ PKG_NOTIFY_PACMAN="libnotify"
 FEAT_NOTIFY=1
 FEAT_TAVILY=0
 FEAT_PATH=1
+FEAT_SPOTIFY=0
 # ── /CONFIG ──
 
 PUR="\033[1;35m"; YEL="\033[1;33m"; GRN="\033[1;32m"; CYN="\033[1;36m"; R="\033[1;31m"; RST="\033[0m"
@@ -46,14 +47,16 @@ checkbox_menu() {
         printf "│ ${CYN}[1]${RST} [%s] Desktop notifications (install libnotify-bin if missing)\n" "$(feat_mark "$FEAT_NOTIFY")"
         printf "│ ${CYN}[2]${RST} [%s] Tavily API key for web_search\n" "$(feat_mark "$FEAT_TAVILY")"
         printf "│ ${CYN}[3]${RST} [%s] Auto-restart on code changes (.path unit)\n" "$(feat_mark "$FEAT_PATH")"
+        printf "│ ${CYN}[4]${RST} [%s] Spotify integration (installs spotipy, requires manual API key setup)\n" "$(feat_mark "$FEAT_SPOTIFY")"
         printf "└ ${CYN}Choice: ${RST}"
         read -r choice || choice="d"
         case "$choice" in
             1) [ "$FEAT_NOTIFY" = 1 ] && FEAT_NOTIFY=0 || FEAT_NOTIFY=1 ;;
             2) [ "$FEAT_TAVILY" = 1 ] && FEAT_TAVILY=0 || FEAT_TAVILY=1 ;;
             3) [ "$FEAT_PATH" = 1 ] && FEAT_PATH=0 || FEAT_PATH=1 ;;
+            4) [ "$FEAT_SPOTIFY" = 1 ] && FEAT_SPOTIFY=0 || FEAT_SPOTIFY=1 ;;
             d|D) break ;;
-            *) printf "│ ${YEL}Invalid choice — enter 1-3 to toggle, d when done${RST}\n" ;;
+            *) printf "│ ${YEL}Invalid choice — enter 1-4 to toggle, d when done${RST}\n" ;;
         esac
     done
 }
@@ -131,6 +134,20 @@ else
     sec_note "Skipped — desktop notifications/reminders will not work without notify-send."
 fi
 sec_ok "Notifications setup"
+
+sec_open "Spotify integration"
+if [ "$FEAT_SPOTIFY" = 1 ]; then
+    if python3 -c "import spotipy" >/dev/null 2>&1; then
+        sec_line "spotipy already installed — skipping pip install."
+    elif python3 -m pip install --user spotipy; then
+        sec_line "Installed spotipy (user site-packages)."
+    else
+        sec_note "pip install spotipy failed — install manually: python3 -m pip install --user spotipy"
+    fi
+else
+    sec_line "Skipped — no Spotify integration."
+fi
+sec_ok "Spotify setup"
 
 sec_open "Repository setup"
 if [ ! -d "$REPO_DIR" ]; then

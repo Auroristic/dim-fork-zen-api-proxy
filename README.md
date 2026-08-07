@@ -174,11 +174,27 @@ To verify: `touch ~/dim-fork-zen-api-proxy/zen_ollama_proxy.py` (or do a real
 | `PROXY_PORT` | `11434` | Port the proxy listens on |
 | `LOCAL_OLLAMA_URL` | `http://127.0.0.1:11435` | Local Ollama to merge/fall back to |
 | `ZEN_BASE` | `https://opencode.ai/zen/v1` | Zen API base URL |
+| `SPOTIFY_CLIENT_ID` | *(unset)* | Spotify app client ID (for `play_song`; see Spotify Setup below) |
+| `SPOTIFY_CLIENT_SECRET` | *(unset)* | Spotify app client secret |
 
 An optional `~/.env` file is loaded at startup (KEY=VALUE lines, `#` comments,
 optional `export ` prefix, optional quotes). **Process environment wins over
 `.env`.** The file can hold any of the variables above; typically just
 `ZEN_API_KEY`.
+
+## Spotify Setup
+
+For the `play_song` tool:
+
+1. Go to [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard),
+   create a free app, and set the redirect URI to
+   `http://localhost:8888/callback`.
+2. Add `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` to `.env` (same file
+   as `ZEN_API_KEY`).
+3. Run
+   `python3 ~/dim-fork-zen-api-proxy/zen_ollama_proxy.py --spotify-auth`
+   once in your terminal and complete the OAuth flow — the saved token is
+   shared with the headless service.
 
 ## Available tools
 
@@ -201,6 +217,14 @@ server-side (up to 4 tool rounds per request; results truncated to 8000 chars):
 | `notify` | Desktop notification (title + message) via `notify-send` |
 | `write_file` | Writes text to a file — **requires user confirmation** (see below) |
 | `open_application` | Launches an app by name (no args) — **requires user confirmation** (see below) |
+| `set_reminder` | Desktop notification reminder (delay or absolute time) via `notify-send` |
+| `list_reminders` | Lists active reminders with ids |
+| `cancel_reminder` | Cancels a pending reminder by id |
+| `save_memory` | Saves a fact to long-term memory (`memories.json`, injected into every request) |
+| `list_memories` | Lists saved memories |
+| `delete_memory` | Deletes a memory by id |
+| `media_control` | Play/pause/next/prev/status via `playerctl` |
+| `play_song` | Searches and plays a track on Spotify (requires Spotify Setup) |
 
 **Confirmation gate:** `write_file` and `open_application` never execute
 directly. The proxy issues a one-time 6-char token; the model asks you to reply

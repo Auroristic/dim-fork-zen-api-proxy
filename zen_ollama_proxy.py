@@ -28,10 +28,17 @@ import subprocess
 import sys
 import threading
 import time
+import argparse
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
+
+try:
+    import spotipy
+    from spotipy.oauth2 import SpotifyOAuth
+except ImportError:
+    spotipy = None
 
 
 def _load_dotenv(path=None):
@@ -62,6 +69,8 @@ PROXY_PORT = int(os.environ.get("PROXY_PORT", "11434"))
 ZEN_BASE = os.environ.get("ZEN_BASE", "https://opencode.ai/zen/v1")
 ZEN_API_KEY = os.environ.get("ZEN_API_KEY", "")
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY", "")
+SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID", "")
+SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET", "")
 UPSTREAM_TIMEOUT = 600
 
 VISION_MODEL_HINTS = ("vision", "gemini", "claude", "gpt-5", "gpt-4", "mimo",
@@ -216,6 +225,21 @@ OUR_TOOLS = [
         "parameters": {"type": "object", "properties": {
             "id": {"type": "string", "description": "Memory id, e.g. '1754612345678-ab12'."}},
             "required": ["id"]}}},
+    {"type": "function", "function": {
+        "name": "media_control",
+        "description": "Control the active media player via playerctl: play, pause, next, prev, or query status.",
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["play", "pause", "next", "prev", "status"],
+                       "description": "Media action to perform."}},
+            "required": ["action"]}}},
+    {"type": "function", "function": {
+        "name": "play_song",
+        "description": "Search Spotify for a track and play it on the active device. "
+                       "Use when the user asks things like 'play hate me on spotify', "
+                       "'put on some jazz', 'play the song hate me'.",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string", "description": "Track or song to search for, e.g. 'hate me'."}},
+            "required": ["query"]}}},
 ]
 EXECUTABLE_TOOLS = {t["function"]["name"] for t in OUR_TOOLS}
 
@@ -406,6 +430,29 @@ def _remove_memory(mid):
             return False
         _write_memories(remaining)
         return True
+
+
+SPOTIFY_SCOPE = "user-modify-playback-state user-read-playback-state user-read-currently-playing"
+SPOTIFY_REDIRECT_URI = "http://localhost:8888/callback"
+
+
+def _spotify_cache_path():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), ".spotify_cache")
+
+
+def _spotify_oauth():
+    return SpotifyOAuth(client_id=SPOTIFY_CLIENT_ID, client_secret=SPOTIFY_CLIENT_SECRET,
+                        redirect_uri=SPOTIFY_REDIRECT_URI, scope=SPOTIFY_SCOPE,
+                        open_browser=False, cache_path=_spotify_cache_path())
+
+
+def _spotify_client():
+    if spotipy is None or not (SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET):
+        return None
+    auth = _spotify_oauth()
+    if auth.get_cached_token() is None:
+        return None
+    return spotipy.Spotify(auth_manager=auth)
 
 
 def _reminders_path():
@@ -775,6 +822,40 @@ def _execute_tool(name, args, zen_model, messages=None):
             if _remove_memory(mid):
                 return "Deleted.", None
             return "Not found.", None
+        if name == "media_control":
+            action = str(args.get("action", "")).strip()
+            if action not in ("play", "pause", "next", "prev", "status"):
+                return "ERROR: media_control action must be one of play/pause/next/prev/status", None
+            if action == "status":
+                ok, out = _run_cmd(["playerctl", "metadata", "--format", "{{artist}} | {{title}}"], timeout=10)
+                if not ok or "no players" in out.lower():
+                    return "No player is running.", None
+                artist, _, title = out.partition("|")
+                return "Now playing: {} by {}".format(title.strip(), artist.strip()), None
+            ok, out = _run_cmd(["playerctl", "previous" if action == "prev" else action], timeout=10)
+            if not ok:
+                return "ERROR: {}".format(out), None
+            return {"play": "Playing", "pause": "Paused",
+                    "next": "Skipped", "prev": "Skipped"}[action], None
+        if name == "play_song":
+            query = str(args.get("query", "")).strip()
+            if not query:
+                return "ERROR: play_song requires a 'query'", None
+            sp = _spotify_client()
+            if sp is None:
+                return ("Spotify not authorized. Please run 'python3 zen_ollama_proxy.py "
+                        "--spotify-auth' in your terminal first."), None
+            try:
+                results = sp.search(query, type="track", limit=1)
+                items = (results.get("tracks") or {}).get("items") or []
+                if not items:
+                    return 'No Spotify results for "{}".'.format(query), None
+                track = items[0]
+                sp.start_playback(uris=[track["uri"]])
+                artist = track["artists"][0]["name"] if track.get("artists") else "unknown"
+                return 'Playing {} by {}'.format(track["name"], artist), None
+            except Exception as e:
+                return "ERROR: Spotify playback failed: {}".format(e), None
         if name == "write_file":
             path = os.path.expanduser(str(args.get("path", "")))
             content = str(args.get("content", ""))
@@ -1278,6 +1359,20 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
 
 def main():
+    parser = argparse.ArgumentParser(description="OpenCode Zen to Ollama proxy")
+    parser.add_argument("--spotify-auth", action="store_true",
+                        help="Run the Spotify OAuth flow in this terminal, save the token, and exit")
+    args = parser.parse_args()
+    if args.spotify_auth:
+        if spotipy is None:
+            print("spotipy is not installed — re-run install.sh with the Spotify feature enabled.")
+            sys.exit(1)
+        if not (SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET):
+            print("SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET not set in ~/.env — add them first.")
+            sys.exit(1)
+        _spotify_oauth().get_access_token()
+        print("Auth successful, token saved")
+        sys.exit(0)
     n = _reschedule_reminders()
     if n:
         print(f"[zen_ollama_proxy] re-armed {n} pending reminder(s) from reminders.json")
