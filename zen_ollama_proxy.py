@@ -629,6 +629,41 @@ def _find_playlist(sp, name):
     return None
 
 
+def _queue_followups(sp, kind, current_uri, artist_id=None):
+    """Auto-queue up to 4 follow-up tracks after single-track playback.
+    Returns the count queued; never raises (fire-and-forget)."""
+    try:
+        if (sp.queue() or {}).get("queue"):
+            return 0
+        if kind == "artist":
+            if not artist_id:
+                return 0
+            top = sp.artist_top_tracks(artist_id)
+            candidates = [t.get("uri") for t in (top.get("tracks") or [])]
+        elif kind == "liked":
+            first = sp.current_user_saved_tracks(limit=1)
+            total = first.get("total", 0)
+            if total <= 0:
+                return 0
+            offset = random.randrange(total)
+            page = sp.current_user_saved_tracks(limit=10, offset=offset)
+            candidates = [t.get("track", {}).get("uri") for t in (page.get("items") or [])]
+        else:
+            return 0
+        count = 0
+        for uri in candidates:
+            if not uri or uri == current_uri:
+                continue
+            if count >= 4:
+                break
+            sp.add_to_queue(uri)
+            count += 1
+        return count
+    except Exception as e:
+        log_err("spotify error: {}".format(e))
+        return 0
+
+
 def _reminders_path():
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "reminders.json")
 
@@ -1040,7 +1075,12 @@ def _execute_tool(name, args, zen_model, messages=None):
                 ok, err = _play_uri(sp, uris=[track["uri"]])
                 if not ok:
                     return err, None
-                return 'Playing {} by {}'.format(track["name"], artist), None
+                artist_id = track["artists"][0]["id"] if track.get("artists") else None
+                queued = _queue_followups(sp, "artist", track["uri"], artist_id=artist_id)
+                reply = 'Playing {} by {}'.format(track["name"], artist)
+                if queued > 0:
+                    reply += " (+{} more queued)".format(queued)
+                return reply, None
             except Exception as e:
                 log_err("spotify error: {}".format(e))
                 return "ERROR: Spotify playback failed: {}".format(e), None
@@ -1067,7 +1107,11 @@ def _execute_tool(name, args, zen_model, messages=None):
                 ok, err = _play_uri(sp, uris=[track["uri"]])
                 if not ok:
                     return err, None
-                return 'Playing {} by {} from your liked songs 🎲'.format(track["name"], artist), None
+                queued = _queue_followups(sp, "liked", track["uri"])
+                reply = 'Playing {} by {} from your liked songs 🎲'.format(track["name"], artist)
+                if queued > 0:
+                    reply += " (+{} more queued)".format(queued)
+                return reply, None
             except Exception as e:
                 log_err("spotify error: {}".format(e))
                 return "ERROR: Spotify playback failed: {}".format(e), None

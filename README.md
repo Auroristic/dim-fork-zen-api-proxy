@@ -249,8 +249,8 @@ server-side (up to 4 tool rounds per request; results truncated to 8000 chars):
 | `list_memories` | Lists saved memories |
 | `delete_memory` | Deletes a memory by id |
 | `media_control` | Play/pause/next/prev/status via `playerctl` |
-| `play_song` | Searches and plays a track on Spotify (requires Spotify Setup) |
-| `play_liked_song` | Plays a random track from your Spotify Liked Songs |
+| `play_song` | Searches and plays a track on Spotify; auto-queues up to 4 more from the same artist (requires Spotify Setup) |
+| `play_liked_song` | Plays a random track from your Spotify Liked Songs; auto-queues more from the library |
 | `spotify_settings` | Volume set/up/down, shuffle and repeat controls |
 | `spotify_queue` | Lists upcoming queue or adds a track to it |
 | `spotify_devices` | Lists devices or switches playback to another |
