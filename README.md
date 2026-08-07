@@ -121,6 +121,33 @@ systemctl --user enable --now zen-ollama-proxy
 
 The proxy loads `~/.env` itself, so the unit needs no `EnvironmentFile`.
 
+### Optional: auto-restart on updates (systemd path unit)
+
+`Restart=on-failure` in the service unit only restarts on a crash — it does
+**not** pick up file changes on its own. To make edits or updates (e.g. after
+a `git pull`) apply automatically, add a systemd *path* unit at
+`~/.config/systemd/user/zen-ollama-proxy.path`:
+
+```ini
+[Path]
+PathModified=%h/dim-fork-zen-api-proxy/zen_ollama_proxy.py
+
+[Install]
+WantedBy=default.target
+```
+
+Enable and start both together:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now zen-ollama-proxy.service
+systemctl --user enable --now zen-ollama-proxy.path
+```
+
+To verify: `touch ~/dim-fork-zen-api-proxy/zen_ollama_proxy.py` (or do a real
+`git pull`), then check `systemctl --user status zen-ollama-proxy` — the
+"Active" timestamp should update to just now.
+
 ## Configuration (env vars)
 
 | Variable | Default | Description |
