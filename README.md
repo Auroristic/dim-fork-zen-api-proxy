@@ -224,7 +224,7 @@ upgrading so the new scopes are granted.
 ## Available tools
 
 The proxy injects these into every Zen chat request and executes them
-server-side (up to 4 tool rounds per request; results truncated to 8000 chars):
+server-side (up to 8 tool rounds per request; results truncated to 8000 chars):
 
 | Tool | What it does |
 |---|---|

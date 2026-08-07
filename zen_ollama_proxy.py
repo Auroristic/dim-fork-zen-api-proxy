@@ -315,7 +315,7 @@ BLOCKED_COMMAND_PATTERNS = [
     (r"\b(?:curl|wget)\b[^|;&]*\|\s*(?:sudo\s+)?(?:sh|bash)\b", "pipe remote script to shell"),
 ]
 
-MAX_TOOL_ROUNDS = 4
+MAX_TOOL_ROUNDS = 8
 TOOL_OUTPUT_LIMIT = 8000
 
 APPROVAL_TTL = 15 * 60
@@ -629,8 +629,9 @@ def _find_playlist(sp, name):
     return None
 
 
-def _queue_followups(sp, kind, current_uri, artist_id=None):
+def _queue_followups(sp, kind, current_uri, artist_id=None, album_id=None):
     """Auto-queue up to 4 follow-up tracks after single-track playback.
+    artist: artist top tracks -> album tracks -> liked batch fallback chain.
     Returns the count queued; never raises (fire-and-forget)."""
     try:
         queue = (sp.queue() or {}).get("queue") or []
@@ -638,19 +639,24 @@ def _queue_followups(sp, kind, current_uri, artist_id=None):
         if upcoming:
             return 0
         seen = {t.get("uri") for t in upcoming if t.get("uri")}
+        candidates = []
         if kind == "artist":
-            if not artist_id:
-                return 0
-            top = sp.artist_top_tracks(artist_id)
-            candidates = [t.get("uri") for t in (top.get("tracks") or [])]
+            if artist_id:
+                try:
+                    top = sp.artist_top_tracks(artist_id)
+                    candidates = [t.get("uri") for t in (top.get("tracks") or [])]
+                except Exception as e:
+                    log_err("spotify error: {}".format(e))
+            if not candidates and album_id:
+                try:
+                    album = sp.album_tracks(album_id)
+                    candidates = [t.get("uri") for t in (album.get("items") or [])]
+                except Exception as e:
+                    log_err("spotify error: {}".format(e))
+            if not candidates:
+                candidates = _liked_candidates(sp)
         elif kind == "liked":
-            first = sp.current_user_saved_tracks(limit=1)
-            total = first.get("total", 0)
-            if total <= 0:
-                return 0
-            offset = random.randrange(total)
-            page = sp.current_user_saved_tracks(limit=10, offset=offset)
-            candidates = [t.get("track", {}).get("uri") for t in (page.get("items") or [])]
+            candidates = _liked_candidates(sp)
         else:
             return 0
         count = 0
@@ -666,6 +672,17 @@ def _queue_followups(sp, kind, current_uri, artist_id=None):
     except Exception as e:
         log_err("spotify error: {}".format(e))
         return 0
+
+
+def _liked_candidates(sp):
+    """Random 10-track page of the user's saved tracks (may include empty uris)."""
+    first = sp.current_user_saved_tracks(limit=1)
+    total = first.get("total", 0)
+    if total <= 0:
+        return []
+    offset = random.randrange(total)
+    page = sp.current_user_saved_tracks(limit=10, offset=offset)
+    return [t.get("track", {}).get("uri") for t in (page.get("items") or [])]
 
 
 def _clear_stuck_repeat(sp):
@@ -1082,7 +1099,7 @@ def _execute_tool(name, args, zen_model, messages=None):
             if sp is None:
                 return SPOTIFY_AUTH_ERR, None
             try:
-                results = sp.search(query, type="track", limit=1)
+                results = sp.search(query, type="track", limit=5)
                 items = (results.get("tracks") or {}).get("items") or []
                 if not items:
                     return 'No Spotify results for "{}".'.format(query), None
@@ -1093,7 +1110,9 @@ def _execute_tool(name, args, zen_model, messages=None):
                     return err, None
                 repeat_note = _clear_stuck_repeat(sp)
                 artist_id = track["artists"][0]["id"] if track.get("artists") else None
-                queued = _queue_followups(sp, "artist", track["uri"], artist_id=artist_id)
+                album_id = (track.get("album") or {}).get("id")
+                queued = _queue_followups(sp, "artist", track["uri"],
+                                          artist_id=artist_id, album_id=album_id)
                 reply = 'Playing {} by {}'.format(track["name"], artist)
                 reply += repeat_note
                 if queued > 0:
@@ -1194,7 +1213,7 @@ def _execute_tool(name, args, zen_model, messages=None):
                     query = str(args.get("query", "")).strip()
                     if not query:
                         return "ERROR: spotify_queue add requires a 'query'", None
-                    results = sp.search(query, type="track", limit=1)
+                    results = sp.search(query, type="track", limit=5)
                     items = (results.get("tracks") or {}).get("items") or []
                     if not items:
                         return 'No Spotify results for "{}".'.format(query), None
