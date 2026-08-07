@@ -26,6 +26,7 @@ import shutil
 import string
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -163,6 +164,23 @@ OUR_TOOLS = [
         "parameters": {"type": "object", "properties": {
             "app": {"type": "string", "description": "Plain application name, e.g. 'firefox' or 'code'"}},
             "required": ["app"]}}},
+    {"type": "function", "function": {
+        "name": "set_reminder",
+        "description": "Set a desktop notification reminder that fires later via notify-send. "
+                       "Provide EXACTLY ONE of the two time params: 'delay_seconds' (number of "
+                       "seconds from now, for 'in X minutes' phrasings) or 'at_time' (full local "
+                       "datetime in ISO 8601, e.g. '2026-08-08T22:00:00', for 'at 10pm' phrasings; "
+                       "compute the date from the current local date in the system prompt). Never "
+                       "provide both or neither. Example mappings: 'send me nyah notification in 1 "
+                       "minute' -> delay_seconds=60, message='nyah'; 'say meow in 5 minutes' -> "
+                       "delay_seconds=300, message='meow'; 'remind me to sleep at 10pm' -> "
+                       "at_time='<today>T22:00:00', message='sleep'; 'ping me to stretch in 30 "
+                       "minutes' -> delay_seconds=1800, message='stretch'.",
+        "parameters": {"type": "object", "properties": {
+            "message": {"type": "string", "description": "Notification text to show when the reminder fires."},
+            "delay_seconds": {"type": "number", "description": "Seconds from now until the reminder fires (for 'in X minutes/hours' requests)."},
+            "at_time": {"type": "string", "description": "Full local datetime (ISO 8601, e.g. 2026-08-08T22:00:00) at which to fire (for 'at 10pm' requests)."}},
+            "required": ["message"]}}},
 ]
 EXECUTABLE_TOOLS = {t["function"]["name"] for t in OUR_TOOLS}
 
@@ -310,6 +328,72 @@ def _check_approval(tool, args, messages):
     if entry["tool"] != tool or entry["args"] != json.dumps(args, sort_keys=True):
         return False
     return True
+
+
+_REMINDER_LOCK = threading.Lock()
+
+
+def _reminders_path():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "reminders.json")
+
+
+def _read_reminders():
+    try:
+        with open(_reminders_path(), encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def _write_reminders(items):
+    try:
+        with open(_reminders_path(), "w", encoding="utf-8") as f:
+            json.dump(items, f, indent=2)
+    except OSError as e:
+        log_err("failed to write reminders.json: {}".format(e))
+
+
+def _add_reminder(entry):
+    with _REMINDER_LOCK:
+        items = _read_reminders()
+        items.append(entry)
+        _write_reminders(items)
+
+
+def _remove_reminder(rid):
+    with _REMINDER_LOCK:
+        items = [i for i in _read_reminders() if i.get("id") != rid]
+        _write_reminders(items)
+
+
+def _fire_reminder(rid, message):
+    log_err("reminder fired: {}".format(_redact_secrets(repr(message[:120]))))
+    if shutil.which("notify-send"):
+        _run_cmd(["notify-send", "--app-name=Zen proxy", "Reminder", message], timeout=15)
+    _remove_reminder(rid)
+
+
+def _reschedule_reminders():
+    """On startup: re-arm future reminders at their exact fire time; silently
+    drop entries missed while the proxy was off (never fire them late)."""
+    now = time.time()
+    pending = []
+    for item in _read_reminders():
+        rid = item.get("id")
+        message = item.get("message")
+        try:
+            fire_at = float(item.get("fire_at"))
+        except (TypeError, ValueError):
+            continue
+        if fire_at > now:
+            timer = threading.Timer(fire_at - now, _fire_reminder, args=(rid, message))
+            timer.daemon = True
+            timer.start()
+            pending.append(item)
+    with _REMINDER_LOCK:
+        _write_reminders(pending)
+    return len(pending)
 
 
 def _execute_tool(name, args, zen_model, messages=None):
@@ -518,6 +602,49 @@ def _execute_tool(name, args, zen_model, messages=None):
             if not ok:
                 return "ERROR: notification failed: {}".format(out), None
             return "Notification sent.", None
+        if name == "set_reminder":
+            message = str(args.get("message", "")).strip()
+            if not message:
+                return "ERROR: set_reminder requires a 'message'", None
+            delay = args.get("delay_seconds")
+            at_time = args.get("at_time")
+            if (delay is None) == (at_time is None):
+                return ("ERROR: set_reminder requires exactly ONE of 'delay_seconds' "
+                        "or 'at_time' (got delay_seconds={!r}, at_time={!r})").format(delay, at_time), None
+            now = datetime.now()
+            if at_time is not None:
+                try:
+                    dt = datetime.fromisoformat(str(at_time).strip())
+                except ValueError:
+                    return ("ERROR: cannot parse at_time {!r}; use a full local ISO 8601 "
+                            "datetime like '2026-08-08T22:00:00'").format(at_time), None
+                if dt.tzinfo is not None:
+                    dt = dt.astimezone().replace(tzinfo=None)
+                fire_at = dt.timestamp()
+                if fire_at <= now.timestamp():
+                    return "ERROR: at_time {} is in the past (now is {:%H:%M:%S})".format(at_time, now), None
+            else:
+                try:
+                    delay = float(delay)
+                except (TypeError, ValueError):
+                    return "ERROR: delay_seconds must be a number, got {!r}".format(delay), None
+                if delay <= 0:
+                    return "ERROR: delay_seconds must be positive, got {}".format(delay), None
+                fire_at = now.timestamp() + delay
+            rid = "{}-{:04x}".format(int(time.time() * 1000), random.getrandbits(16))
+            entry = {"id": rid, "message": message, "fire_at": fire_at,
+                     "created_at": time.time()}
+            _add_reminder(entry)
+            timer = threading.Timer(max(0.0, fire_at - time.time()),
+                                    _fire_reminder, args=(rid, message))
+            timer.daemon = True
+            timer.start()
+            fire_dt = datetime.fromtimestamp(fire_at)
+            if fire_dt.date() == now.date():
+                when = "today at {:%H:%M:%S}".format(fire_dt)
+            else:
+                when = "{:%Y-%m-%d %H:%M:%S}".format(fire_dt)
+            return 'Reminder set for {} — "{}"'.format(when, message), None
         if name == "write_file":
             path = os.path.expanduser(str(args.get("path", "")))
             content = str(args.get("content", ""))
@@ -755,6 +882,10 @@ class ProxyHandler(BaseHTTPRequestHandler):
         zen_payload = dict(payload)
         zen_payload["model"] = zen_model
         zen_payload["messages"] = self._zen_messages(payload.get("messages", []), zen_model)
+        zen_payload["messages"].insert(0, {
+            "role": "system", "type": "message",
+            "content": "Current local date and time: {:%Y-%m-%d %H:%M:%S %A} — use this to "
+                       "compute 'at_time' and 'delay_seconds' for set_reminder.".format(datetime.now())})
         zen_payload["tools"] = OUR_TOOLS
         if payload.get("stream", True):
             self._zen_chat_stream(zen_payload)
@@ -1006,6 +1137,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
 
 def main():
+    n = _reschedule_reminders()
+    if n:
+        print(f"[zen_ollama_proxy] re-armed {n} pending reminder(s) from reminders.json")
     server = ThreadingHTTPServer(("127.0.0.1", PROXY_PORT), ProxyHandler)
     print(f"[zen_ollama_proxy] listening on 127.0.0.1:{PROXY_PORT}")
     print(f"[zen_ollama_proxy] local Ollama fallback: {LOCAL_OLLAMA_URL}")
