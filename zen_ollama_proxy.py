@@ -471,6 +471,26 @@ def _launch_spotify():
     return False
 
 
+def _play_on_device(sp, device_id, uris):
+    try:
+        sp.start_playback(device_id=device_id, uris=uris)
+        return True, None
+    except Exception as e:
+        log_err("spotify error: {}".format(e))
+        if not _is_no_device_error(e):
+            return False, "ERROR: Spotify playback failed: {}".format(e)
+    try:
+        sp.transfer_playback(device_id, force_transfer=True)
+    except Exception as e:
+        log_err("spotify transfer_playback error: {}".format(e))
+    try:
+        sp.start_playback(device_id=device_id, uris=uris)
+        return True, None
+    except Exception as e:
+        log_err("spotify error: {}".format(e))
+        return False, "ERROR: Spotify playback failed: {}".format(e)
+
+
 def _reminders_path():
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "reminders.json")
 
@@ -869,29 +889,33 @@ def _execute_tool(name, args, zen_model, messages=None):
                 track = items[0]
                 artist = track["artists"][0]["name"] if track.get("artists") else "unknown"
                 label = 'Playing {} by {}'.format(track["name"], artist)
-                try:
-                    sp.start_playback(uris=[track["uri"]])
-                    return label, None
-                except Exception as e:
-                    if not _is_no_device_error(e):
-                        return "ERROR: Spotify playback failed: {}".format(e), None
-                _launch_spotify()
-                try:
-                    for _ in range(12):
-                        time.sleep(0.5)
-                        if any(d.get("is_active") for d in (sp.devices().get("devices") or [])):
-                            break
-                except Exception:
-                    pass
-                try:
-                    sp.start_playback(uris=[track["uri"]])
-                    return label, None
-                except Exception as e:
-                    if _is_no_device_error(e):
-                        return ("Spotify isn't open and couldn't be launched — open it "
-                                "and try again."), None
-                    return "ERROR: Spotify playback failed: {}".format(e), None
+                uri = track["uri"]
+                devices = (sp.devices() or {}).get("devices", [])
+                target = next((d for d in devices if d.get("type") == "Computer"), None)
+                if target is None and devices:
+                    target = devices[0]
+                if target is None:
+                    _launch_spotify()
+                    try:
+                        for _ in range(12):
+                            time.sleep(0.5)
+                            if (sp.devices() or {}).get("devices"):
+                                break
+                    except Exception:
+                        pass
+                    devices = (sp.devices() or {}).get("devices", [])
+                    target = next((d for d in devices if d.get("type") == "Computer"), None)
+                    if target is None and devices:
+                        target = devices[0]
+                    if target is None:
+                        return ("No Spotify devices found — open the Spotify desktop "
+                                "client (logged in) and try again."), None
+                ok, err = _play_on_device(sp, target["id"], [uri])
+                if not ok:
+                    return err, None
+                return label, None
             except Exception as e:
+                log_err("spotify error: {}".format(e))
                 return "ERROR: Spotify playback failed: {}".format(e), None
         if name == "write_file":
             path = os.path.expanduser(str(args.get("path", "")))
