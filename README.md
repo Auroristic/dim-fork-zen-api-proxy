@@ -30,6 +30,8 @@ git clone https://github.com/Auroristic/dim-fork-zen-api-proxy.git && cd dim-for
 ./install.sh
 ```
 
+To remove the service later, run `./uninstall.sh`.
+
 Run it interactively in a terminal (not as root, not via a non-interactive
 pipe). Manual setup instructions continue below.
 
@@ -268,5 +270,5 @@ explicitly tells the model it cannot see the image and must not guess.
 ## Maintainer notes
 
 - When changing `zen_ollama_proxy.py` (port, env vars, dependencies, tools),
-  update the CONFIG block and feature menu in `install.sh` in the same commit
-  so the installer never drifts.
+  update the CONFIG block and feature menu in `install.sh` and the CONFIG
+  block in `uninstall.sh` in the same commit so the installers never drift.

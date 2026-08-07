@@ -100,8 +100,8 @@ printf "│ ${YEL}(use d to confirm the selection above)${RST}\n\n"
 sec_open "API keys"
 zen_key=""
 while [ -z "$zen_key" ]; do
-    printf "│ ${CYN}ZEN_API_KEY${RST} (required — paste it, input is hidden): "
-    read -r -s zen_key; printf "\n"
+    printf "│ ${CYN}ZEN_API_KEY${RST} (required — shown so you can double-check it): "
+    read -r zen_key; printf "\n"
     zen_key="$(trim "$zen_key")"
     [ -z "$zen_key" ] && sec_note "ZEN_API_KEY cannot be empty."
 done
