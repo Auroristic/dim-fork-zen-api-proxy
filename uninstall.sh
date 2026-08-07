@@ -34,7 +34,7 @@ trim() { sed -e 's/^[[:space:]"'"'"']*//' -e 's/[[:space:]"'"'"']*$//' <<< "$1";
 checkbox_menu() {
     while true; do
         printf "${PUR}┌ ◈ Optional removals — type a number to toggle, d when done${RST}\n"
-        printf "│ ${CYN}[1]${RST} [%s] Delete repo directory (contains .env API keys + reminders.json)\n" "$(feat_mark "$FEAT_REPO")"
+        printf "│ ${CYN}[1]${RST} [%s] Delete repo directory (contains .env API keys, reminders.json, memories.json, and the Spotify token cache)\n" "$(feat_mark "$FEAT_REPO")"
         printf "└ ${CYN}Choice: ${RST}"
         read -r choice || choice="d"
         case "$choice" in
@@ -75,6 +75,13 @@ if [ -d "$REPO_DIR" ]; then
 else
     sec_line "repo directory absent: $REPO_DIR"
 fi
+for f in .env reminders.json memories.json .spotify_cache; do
+    if [ -f "$REPO_DIR/$f" ]; then
+        sec_line "state file present: $REPO_DIR/$f"
+    else
+        sec_line "state file absent: $REPO_DIR/$f"
+    fi
+done
 sec_ok "Detection complete"
 
 checkbox_menu
@@ -105,7 +112,7 @@ systemctl --user daemon-reload || true
 systemctl --user reset-failed "$SERVICE.service" || true
 if [ "$FEAT_REPO" = 1 ]; then
     rm -rf "$REPO_DIR" || true
-    sec_line "Removed $REPO_DIR (.env API keys and reminders.json deleted)."
+    sec_line "Removed $REPO_DIR (.env API keys, reminders.json, memories.json, and Spotify token cache deleted)."
 fi
 sec_ok "Removal done"
 

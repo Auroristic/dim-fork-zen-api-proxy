@@ -22,8 +22,8 @@ the model) The proxy exposes a fixed 14-tool set instead.
 
 For a guided, interactive install — prerequisites check, API keys saved to
 `.env`, optional desktop-notification dependency, systemd user service plus
-auto-restart-on-update path unit, and startup verification — just run the
-bundled installer:
+path unit with a restart helper for auto-restart on updates, and startup
+verification — just run the bundled installer:
 
 ```bash
 git clone https://github.com/Auroristic/dim-fork-zen-api-proxy.git && cd dim-fork-zen-api-proxy
@@ -143,14 +143,28 @@ The proxy loads `~/.env` itself, so the unit needs no `EnvironmentFile`.
 `Restart=on-failure` in the service unit only restarts on a crash — it does
 **not** pick up file changes on its own. To make edits or updates (e.g. after
 a `git pull`) apply automatically, add a systemd *path* unit at
-`~/.config/systemd/user/zen-ollama-proxy.path`:
+`~/.config/systemd/user/zen-ollama-proxy.path` that triggers a oneshot
+restart helper:
 
 ```ini
 [Path]
 PathModified=%h/dim-fork-zen-api-proxy/zen_ollama_proxy.py
+Unit=zen-ollama-proxy-restart.service
 
 [Install]
 WantedBy=default.target
+```
+
+with the restarter unit at
+`~/.config/systemd/user/zen-ollama-proxy-restart.service`:
+
+```ini
+[Unit]
+Description=Restart zen-ollama-proxy on code change
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl --user restart zen-ollama-proxy.service
 ```
 
 Enable and start both together:
@@ -174,7 +188,7 @@ To verify: `touch ~/dim-fork-zen-api-proxy/zen_ollama_proxy.py` (or do a real
 | `PROXY_PORT` | `11434` | Port the proxy listens on |
 | `LOCAL_OLLAMA_URL` | `http://127.0.0.1:11435` | Local Ollama to merge/fall back to |
 | `ZEN_BASE` | `https://opencode.ai/zen/v1` | Zen API base URL |
-| `SPOTIFY_CLIENT_ID` | *(unset)* | Spotify app client ID (for `play_song`; see Spotify Setup below) |
+| `SPOTIFY_CLIENT_ID` | *(unset)* | Spotify app client ID (for the Spotify tools; see Spotify Setup below) |
 | `SPOTIFY_CLIENT_SECRET` | *(unset)* | Spotify app client secret |
 
 An optional `~/.env` file is loaded at startup (KEY=VALUE lines, `#` comments,
@@ -184,7 +198,7 @@ optional `export ` prefix, optional quotes). **Process environment wins over
 
 ## Spotify Setup
 
-For the `play_song` tool:
+For the `play_song` and `play_liked_song` tools:
 
 1. Install `spotipy` via your AUR helper: `paru -S python-spotipy` or
    `yay -S python-spotipy` (or enable the Spotify checkbox in `install.sh`).

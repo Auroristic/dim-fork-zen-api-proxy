@@ -99,20 +99,42 @@ checkbox_menu
 printf "│ ${YEL}(use d to confirm the selection above)${RST}\n\n"
 
 sec_open "API keys"
-zen_key=""
-while [ -z "$zen_key" ]; do
-    printf "│ ${CYN}ZEN_API_KEY${RST} (required — shown so you can double-check it): "
-    read -r zen_key; printf "\n"
-    zen_key="$(trim "$zen_key")"
-    [ -z "$zen_key" ] && sec_note "ZEN_API_KEY cannot be empty."
-done
-tavily=""
-if [ "$FEAT_TAVILY" = 1 ]; then
-    printf "│ ${CYN}TAVILY_API_KEY${RST} (optional — Enter to skip): "
-    read -r tavily; printf "\n"
-    tavily="$(trim "$tavily")"
+keep_env=0
+if [ -f "$ENV_FILE" ]; then
+    existing_zen="$(grep -E '^[[:space:]]*(export[[:space:]]+)?ZEN_API_KEY=' "$ENV_FILE" | tail -1 || true)"
+fi
+if [ -n "$existing_zen" ]; then
+    zen_val="$(trim "$(sed -E 's/^[[:space:]]*(export[[:space:]]+)?ZEN_API_KEY=[[:space:]]*//' <<< "$existing_zen")")"
+    if [ -n "$zen_val" ]; then
+        prefix="${zen_val:0:6}"
+        [ "${#zen_val}" -gt 6 ] && prefix="$prefix…"
+        sec_line "Found $ENV_FILE — ZEN_API_KEY starts with ${GRN}$prefix${RST}"
+        printf "│ ${YEL}Keep existing keys in .env?${RST} [Y/n]: "
+        read -r keep_yn || keep_yn="y"
+        case "$(trim "$keep_yn")" in
+            ""|y|Y) keep_env=1 ;;
+            *) sec_line "Re-entering keys — .env will be rewritten." ;;
+        esac
+    fi
+fi
+if [ "$keep_env" = 1 ]; then
+    sec_line "Keeping existing keys — skipping ZEN_API_KEY/TAVILY_API_KEY prompts."
 else
-    sec_line "Skipping TAVILY_API_KEY (web_search will report unavailable)."
+    zen_key=""
+    while [ -z "$zen_key" ]; do
+        printf "│ ${CYN}ZEN_API_KEY${RST} (required — shown so you can double-check it): "
+        read -r zen_key; printf "\n"
+        zen_key="$(trim "$zen_key")"
+        [ -z "$zen_key" ] && sec_note "ZEN_API_KEY cannot be empty."
+    done
+    tavily=""
+    if [ "$FEAT_TAVILY" = 1 ]; then
+        printf "│ ${CYN}TAVILY_API_KEY${RST} (optional — Enter to skip): "
+        read -r tavily; printf "\n"
+        tavily="$(trim "$tavily")"
+    else
+        sec_line "Skipping TAVILY_API_KEY (web_search will report unavailable)."
+    fi
 fi
 sec_ok "API keys collected"
 
@@ -174,17 +196,21 @@ fi
 sec_ok "Repository ready"
 
 sec_open "Environment (.env)"
-tmp_env="$(mktemp)"
-if [ -f "$ENV_FILE" ]; then
-    grep -Ev '^[[:space:]]*(export[[:space:]]+)?(ZEN_API_KEY|TAVILY_API_KEY)=' "$ENV_FILE" > "$tmp_env" || true
+if [ "$keep_env" = 1 ]; then
+    sec_line "Left $ENV_FILE untouched — existing keys preserved."
+else
+    tmp_env="$(mktemp)"
+    if [ -f "$ENV_FILE" ]; then
+        grep -Ev '^[[:space:]]*(export[[:space:]]+)?(ZEN_API_KEY|TAVILY_API_KEY)=' "$ENV_FILE" > "$tmp_env" || true
+    fi
+    printf 'ZEN_API_KEY="%s"\n' "$zen_key" >> "$tmp_env"
+    if [ -n "$tavily" ]; then
+        printf 'TAVILY_API_KEY="%s"\n' "$tavily" >> "$tmp_env"
+    fi
+    mv "$tmp_env" "$ENV_FILE"
+    chmod 600 "$ENV_FILE"
+    sec_line "Wrote API keys to $ENV_FILE (chmod 600)."
 fi
-printf 'ZEN_API_KEY="%s"\n' "$zen_key" >> "$tmp_env"
-if [ -n "$tavily" ]; then
-    printf 'TAVILY_API_KEY="%s"\n' "$tavily" >> "$tmp_env"
-fi
-mv "$tmp_env" "$ENV_FILE"
-chmod 600 "$ENV_FILE"
-sec_line "Wrote API keys to $ENV_FILE (chmod 600)."
 sec_ok ".env ready"
 
 sec_open "Systemd user units"
