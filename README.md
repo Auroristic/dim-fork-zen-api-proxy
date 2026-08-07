@@ -198,7 +198,9 @@ optional `export ` prefix, optional quotes). **Process environment wins over
 
 ## Spotify Setup
 
-For the `play_song` and `play_liked_song` tools:
+For the Spotify tools (`play_song`, `play_liked_song`, `spotify_settings`,
+`spotify_queue`, `spotify_devices`, `play_playlist`, `spotify_library`,
+`listening_stats`):
 
 1. Install `spotipy` via your AUR helper: `paru -S python-spotipy` or
    `yay -S python-spotipy` (or enable the Spotify checkbox in `install.sh`).
@@ -211,6 +213,13 @@ For the `play_song` and `play_liked_song` tools:
    `python3 ~/dim-fork-zen-api-proxy/zen_ollama_proxy.py --spotify-auth`
    once in your terminal and complete the OAuth flow — the saved token is
    shared with the headless service.
+
+The proxy requests these scopes at `--spotify-auth`:
+`user-modify-playback-state`, `user-read-playback-state`,
+`user-read-currently-playing`, `user-library-read`, `user-library-modify`,
+`user-read-recently-played`, `playlist-read-private`,
+`playlist-modify-private`, `user-top-read`. Re-run `--spotify-auth` after
+upgrading so the new scopes are granted.
 
 ## Available tools
 
@@ -242,6 +251,12 @@ server-side (up to 4 tool rounds per request; results truncated to 8000 chars):
 | `media_control` | Play/pause/next/prev/status via `playerctl` |
 | `play_song` | Searches and plays a track on Spotify (requires Spotify Setup) |
 | `play_liked_song` | Plays a random track from your Spotify Liked Songs |
+| `spotify_settings` | Volume set/up/down, shuffle and repeat controls |
+| `spotify_queue` | Lists upcoming queue or adds a track to it |
+| `spotify_devices` | Lists devices or switches playback to another |
+| `play_playlist` | Plays a playlist by name (substring match) |
+| `spotify_library` | Like/unlike current track, add to playlist, resume last played |
+| `listening_stats` | Recently played, top artists, top tracks |
 
 **Confirmation gate:** `write_file` and `open_application` never execute
 directly. The proxy issues a one-time 6-char token; the model asks you to reply

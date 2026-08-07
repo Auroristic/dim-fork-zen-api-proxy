@@ -246,6 +246,64 @@ OUR_TOOLS = [
                        "Use when the user asks things like 'play something from my liked list', "
                        "'play a random liked song', 'put on something I've liked'.",
         "parameters": {"type": "object", "properties": {}, "required": []}}},
+    {"type": "function", "function": {
+        "name": "spotify_settings",
+        "description": "Adjust Spotify playback settings: set volume (0-100), volume up/down ±10, "
+                       "shuffle on/off, repeat track/all/off. Use when the user asks things like "
+                       "'turn it down', 'set volume to 30', 'shuffle on', 'repeat this song'.",
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string",
+                       "enum": ["volume_set", "volume_up", "volume_down", "shuffle_on",
+                                "shuffle_off", "repeat_track", "repeat_all", "repeat_off"],
+                       "description": "Playback setting action to perform."},
+            "value": {"type": "integer", "description": "Volume 0-100 (only for volume_set)."}},
+            "required": ["action"]}}},
+    {"type": "function", "function": {
+        "name": "spotify_queue",
+        "description": "List the upcoming queue or add a track to the queue. Use when the user asks "
+                       "things like 'what's next in the queue', 'queue up X after this'.",
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["list", "add"],
+                       "description": "List upcoming tracks or add a track."},
+            "query": {"type": "string", "description": "Track to search for and queue (only for add)."}},
+            "required": ["action"]}}},
+    {"type": "function", "function": {
+        "name": "spotify_devices",
+        "description": "List Spotify devices or switch playback to another device by name. Use when "
+                       "the user asks things like 'what devices do i have', 'play it on my phone instead'.",
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["list", "switch"],
+                       "description": "List devices or switch playback."},
+            "name": {"type": "string", "description": "Device name substring to switch to (only for switch)."}},
+            "required": ["action"]}}},
+    {"type": "function", "function": {
+        "name": "play_playlist",
+        "description": "Find a playlist by name (substring match) and play it as context. Use when the "
+                       "user asks things like 'play my chill playlist', 'put on my workout playlist'.",
+        "parameters": {"type": "object", "properties": {
+            "name": {"type": "string", "description": "Playlist name or part of it."}},
+            "required": ["name"]}}},
+    {"type": "function", "function": {
+        "name": "spotify_library",
+        "description": "Manage the Spotify library: like/unlike the current track, add the current track "
+                       "to a playlist, or resume the last played track. Use when the user asks things like "
+                       "'save this song', 'add this to my road trip playlist', 'put back on what i was listening to'.",
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string",
+                       "enum": ["like_current", "unlike_current", "add_current_to_playlist", "resume_last"],
+                       "description": "Library action to perform."},
+            "name": {"type": "string",
+                     "description": "Playlist name substring (only for add_current_to_playlist)."}},
+            "required": ["action"]}}},
+    {"type": "function", "function": {
+        "name": "listening_stats",
+        "description": "Show listening history: last 5 recently played, top 5 artists, or top 5 tracks "
+                       "(medium term). Use when the user asks things like 'what have i been listening to', "
+                       "'what's my top artist'.",
+        "parameters": {"type": "object", "properties": {
+            "kind": {"type": "string", "enum": ["recently_played", "top_artists", "top_tracks"],
+                     "description": "Which stats to show."}},
+            "required": ["kind"]}}},
 ]
 EXECUTABLE_TOOLS = {t["function"]["name"] for t in OUR_TOOLS}
 
@@ -439,8 +497,13 @@ def _remove_memory(mid):
 
 
 SPOTIFY_SCOPE = ("user-modify-playback-state user-read-playback-state "
-                 "user-read-currently-playing user-library-read")
+                 "user-read-currently-playing user-library-read "
+                 "user-library-modify user-read-recently-played "
+                 "playlist-read-private playlist-modify-private user-top-read")
 SPOTIFY_REDIRECT_URI = "http://127.0.0.1:8888/callback"
+
+SPOTIFY_AUTH_ERR = ("Spotify not authorized. Please run 'python3 zen_ollama_proxy.py "
+                    "--spotify-auth' in your terminal first.")
 
 
 def _spotify_cache_path():
@@ -478,9 +541,14 @@ def _launch_spotify():
     return False
 
 
-def _play_on_device(sp, device_id, uris):
+def _play_on_device(sp, device_id, uris=None, context_uri=None):
+    kwargs = {}
+    if uris is not None:
+        kwargs["uris"] = uris
+    if context_uri is not None:
+        kwargs["context_uri"] = context_uri
     try:
-        sp.start_playback(device_id=device_id, uris=uris)
+        sp.start_playback(device_id=device_id, **kwargs)
         return True, None
     except Exception as e:
         log_err("spotify error: {}".format(e))
@@ -491,43 +559,74 @@ def _play_on_device(sp, device_id, uris):
     except Exception as e:
         log_err("spotify transfer_playback error: {}".format(e))
     try:
-        sp.start_playback(device_id=device_id, uris=uris)
+        sp.start_playback(device_id=device_id, **kwargs)
         return True, None
     except Exception as e:
         log_err("spotify error: {}".format(e))
         return False, "ERROR: Spotify playback failed: {}".format(e)
 
 
-def _play_track_uri(sp, uri):
-    """Device selection + launch + transfer fallback. Returns (True, None) or (False, error)."""
-    try:
-        devices = (sp.devices() or {}).get("devices", [])
-    except Exception as e:
-        log_err("spotify error: {}".format(e))
-        return False, "ERROR: Spotify playback failed: {}".format(e)
-    target = next((d for d in devices if d.get("type") == "Computer"), None)
-    if target is None and devices:
-        target = devices[0]
-    if target is None:
-        _launch_spotify()
-        try:
-            for _ in range(12):
-                time.sleep(0.5)
-                if (sp.devices() or {}).get("devices"):
-                    break
-        except Exception:
-            pass
+def _find_device(sp):
+    """Computer device or first available; launches Spotify and retries if none."""
+    def scan():
         devices = (sp.devices() or {}).get("devices", [])
         target = next((d for d in devices if d.get("type") == "Computer"), None)
-        if target is None and devices:
-            target = devices[0]
-        if target is None:
-            return False, ("No Spotify devices found — open the Spotify desktop "
-                           "client (logged in) and try again.")
-    ok, err = _play_on_device(sp, target["id"], [uri])
+        return target if target is not None else (devices[0] if devices else None)
+    target = scan()
+    if target is not None:
+        return target
+    _launch_spotify()
+    try:
+        for _ in range(12):
+            time.sleep(0.5)
+            if (sp.devices() or {}).get("devices"):
+                break
+    except Exception:
+        pass
+    return scan()
+
+
+def _play_uri(sp, uris=None, context_uri=None):
+    """Pick a device and start playback of track uris or a context (playlist/album).
+    Returns (True, None) or (False, error-string)."""
+    target = _find_device(sp)
+    if target is None:
+        return False, ("No Spotify devices found — open the Spotify desktop "
+                       "client (logged in) and try again.")
+    ok, err = _play_on_device(sp, target["id"], uris=uris, context_uri=context_uri)
     if not ok:
         return False, err
     return True, None
+
+
+def _current_track(sp):
+    """Return (uri, name, artist) of the currently playing track, or (None, None, None)."""
+    try:
+        info = sp.current_user_playing_track() or {}
+    except Exception as e:
+        log_err("spotify error: {}".format(e))
+        return None, None, None
+    item = info.get("item") or {}
+    if not item.get("uri"):
+        return None, None, None
+    name = item.get("name", "unknown")
+    artists = item.get("artists") or []
+    artist = artists[0].get("name") if artists else "unknown"
+    return item.get("uri"), name, artist
+
+
+def _find_playlist(sp, name):
+    """Substring match on the user's playlists (case-insensitive). Returns dict or None."""
+    target = name.lower()
+    for offset in range(0, 200, 50):
+        page = sp.current_user_playlists(limit=50, offset=offset)
+        items = page.get("items") or []
+        for p in items:
+            if target in (p.get("name") or "").lower():
+                return p
+        if offset + len(items) >= (page.get("total") or 0):
+            break
+    return None
 
 
 def _reminders_path():
@@ -918,8 +1017,7 @@ def _execute_tool(name, args, zen_model, messages=None):
                 return "ERROR: play_song requires a 'query'", None
             sp = _spotify_client()
             if sp is None:
-                return ("Spotify not authorized. Please run 'python3 zen_ollama_proxy.py "
-                        "--spotify-auth' in your terminal first."), None
+                return SPOTIFY_AUTH_ERR, None
             try:
                 results = sp.search(query, type="track", limit=1)
                 items = (results.get("tracks") or {}).get("items") or []
@@ -927,7 +1025,7 @@ def _execute_tool(name, args, zen_model, messages=None):
                     return 'No Spotify results for "{}".'.format(query), None
                 track = _pick_track(items, query)
                 artist = track["artists"][0]["name"] if track.get("artists") else "unknown"
-                ok, err = _play_track_uri(sp, track["uri"])
+                ok, err = _play_uri(sp, uris=[track["uri"]])
                 if not ok:
                     return err, None
                 return 'Playing {} by {}'.format(track["name"], artist), None
@@ -937,8 +1035,7 @@ def _execute_tool(name, args, zen_model, messages=None):
         if name == "play_liked_song":
             sp = _spotify_client()
             if sp is None:
-                return ("Spotify not authorized. Please run 'python3 zen_ollama_proxy.py "
-                        "--spotify-auth' in your terminal first."), None
+                return SPOTIFY_AUTH_ERR, None
             try:
                 first = sp.current_user_saved_tracks(limit=1)
                 total = first.get("total", 0)
@@ -955,10 +1052,201 @@ def _execute_tool(name, args, zen_model, messages=None):
                 if track is None:
                     return "Couldn't find an available liked song — try again.", None
                 artist = track["artists"][0]["name"] if track.get("artists") else "unknown"
-                ok, err = _play_track_uri(sp, track["uri"])
+                ok, err = _play_uri(sp, uris=[track["uri"]])
                 if not ok:
                     return err, None
                 return 'Playing {} by {} from your liked songs 🎲'.format(track["name"], artist), None
+            except Exception as e:
+                log_err("spotify error: {}".format(e))
+                return "ERROR: Spotify playback failed: {}".format(e), None
+        if name == "spotify_settings":
+            sp = _spotify_client()
+            if sp is None:
+                return SPOTIFY_AUTH_ERR, None
+            try:
+                action = args.get("action")
+                if action == "volume_set":
+                    value = args.get("value")
+                    if not isinstance(value, int) or not 0 <= value <= 100:
+                        return "ERROR: volume must be an integer between 0 and 100.", None
+                    sp.volume(value)
+                    return "Volume set to {}%.".format(value), None
+                if action in ("volume_up", "volume_down"):
+                    device = ((sp.current_playback() or {}).get("device") or {})
+                    base = device.get("volume_percent")
+                    if base is None:
+                        return "ERROR: no active device to adjust volume on.", None
+                    new = max(0, min(100, base + (10 if action == "volume_up" else -10)))
+                    sp.volume(new)
+                    return "Volume {} to {}%.".format(
+                        "raised" if action == "volume_up" else "lowered", new), None
+                if action == "shuffle_on":
+                    sp.shuffle(True)
+                    return "Shuffle on.", None
+                if action == "shuffle_off":
+                    sp.shuffle(False)
+                    return "Shuffle off.", None
+                if action == "repeat_track":
+                    sp.repeat("track")
+                    return "Repeat set to track.", None
+                if action == "repeat_all":
+                    sp.repeat("context")
+                    return "Repeat set to all.", None
+                if action == "repeat_off":
+                    sp.repeat("off")
+                    return "Repeat off.", None
+                return "ERROR: unknown spotify_settings action: {}".format(action), None
+            except Exception as e:
+                log_err("spotify error: {}".format(e))
+                return "ERROR: Spotify playback failed: {}".format(e), None
+        if name == "spotify_queue":
+            sp = _spotify_client()
+            if sp is None:
+                return SPOTIFY_AUTH_ERR, None
+            try:
+                action = args.get("action")
+                if action == "list":
+                    queue = ((sp.queue() or {}).get("queue") or [])[:5]
+                    if not queue:
+                        return "The queue is empty.", None
+                    lines = []
+                    for i, t in enumerate(queue, 1):
+                        artist = t["artists"][0]["name"] if t.get("artists") else "unknown"
+                        lines.append("{}. {} — {}".format(i, t.get("name", "?"), artist))
+                    return "Upcoming:\n" + "\n".join(lines), None
+                if action == "add":
+                    query = str(args.get("query", "")).strip()
+                    if not query:
+                        return "ERROR: spotify_queue add requires a 'query'", None
+                    results = sp.search(query, type="track", limit=1)
+                    items = (results.get("tracks") or {}).get("items") or []
+                    if not items:
+                        return 'No Spotify results for "{}".'.format(query), None
+                    track = _pick_track(items, query)
+                    sp.add_to_queue(track["uri"])
+                    artist = track["artists"][0]["name"] if track.get("artists") else "unknown"
+                    return 'Queued "{}" by {} after the current track.'.format(track["name"], artist), None
+                return "ERROR: unknown spotify_queue action: {}".format(action), None
+            except Exception as e:
+                log_err("spotify error: {}".format(e))
+                return "ERROR: Spotify playback failed: {}".format(e), None
+        if name == "spotify_devices":
+            sp = _spotify_client()
+            if sp is None:
+                return SPOTIFY_AUTH_ERR, None
+            try:
+                devices = (sp.devices() or {}).get("devices", [])
+                action = args.get("action")
+                if action == "list":
+                    if not devices:
+                        return "No Spotify devices found.", None
+                    lines = ["{}. {} ({})".format(i, d.get("name", "?"), d.get("type", "?"))
+                             for i, d in enumerate(devices, 1)]
+                    return "Devices:\n" + "\n".join(lines), None
+                if action == "switch":
+                    needle = str(args.get("name", "")).strip().lower()
+                    if not needle:
+                        return "ERROR: spotify_devices switch requires a 'name'", None
+                    target = next((d for d in devices if needle in d.get("name", "").lower()), None)
+                    if target is None:
+                        return 'No device matching "{}" found.'.format(needle), None
+                    sp.transfer_playback(target["id"], force_transfer=True)
+                    return 'Switched playback to "{}".'.format(target.get("name", "device")), None
+                return "ERROR: unknown spotify_devices action: {}".format(action), None
+            except Exception as e:
+                log_err("spotify error: {}".format(e))
+                return "ERROR: Spotify playback failed: {}".format(e), None
+        if name == "play_playlist":
+            query = str(args.get("name", "")).strip()
+            if not query:
+                return "ERROR: play_playlist requires a 'name'", None
+            sp = _spotify_client()
+            if sp is None:
+                return SPOTIFY_AUTH_ERR, None
+            try:
+                playlist = _find_playlist(sp, query)
+                if playlist is None:
+                    return 'No playlist matching "{}".'.format(query), None
+                ok, err = _play_uri(sp, context_uri=playlist["uri"])
+                if not ok:
+                    return err, None
+                return 'Playing playlist "{}".'.format(playlist["name"]), None
+            except Exception as e:
+                log_err("spotify error: {}".format(e))
+                return "ERROR: Spotify playback failed: {}".format(e), None
+        if name == "spotify_library":
+            sp = _spotify_client()
+            if sp is None:
+                return SPOTIFY_AUTH_ERR, None
+            try:
+                action = args.get("action")
+                if action in ("like_current", "unlike_current", "add_current_to_playlist"):
+                    uri, tname, tartist = _current_track(sp)
+                    if uri is None:
+                        return "Nothing is playing right now.", None
+                    if action == "like_current":
+                        sp.current_user_saved_tracks_add([uri])
+                        return 'Saved "{}" by {} to your liked songs.'.format(tname, tartist), None
+                    if action == "unlike_current":
+                        sp.current_user_saved_tracks_delete([uri])
+                        return 'Removed "{}" by {} from your liked songs.'.format(tname, tartist), None
+                    pname = str(args.get("name", "")).strip()
+                    if not pname:
+                        return "ERROR: spotify_library add_current_to_playlist requires a 'name'", None
+                    playlist = _find_playlist(sp, pname)
+                    if playlist is None:
+                        return 'No playlist matching "{}".'.format(pname), None
+                    sp.playlist_add_items(playlist["uri"], [uri])
+                    return 'Added "{}" by {} to playlist "{}".'.format(tname, tartist, playlist["name"]), None
+                if action == "resume_last":
+                    recent = (sp.current_user_recently_played(limit=1) or {}).get("items") or []
+                    if not recent:
+                        return "No recently played tracks found.", None
+                    track = recent[0].get("track") or {}
+                    if not track.get("uri"):
+                        return "No recently played track available.", None
+                    artist = track["artists"][0]["name"] if track.get("artists") else "unknown"
+                    ok, err = _play_uri(sp, uris=[track["uri"]])
+                    if not ok:
+                        return err, None
+                    return 'Playing "{}" by {} (last played).'.format(track.get("name", "?"), artist), None
+                return "ERROR: unknown spotify_library action: {}".format(action), None
+            except Exception as e:
+                log_err("spotify error: {}".format(e))
+                return "ERROR: Spotify playback failed: {}".format(e), None
+        if name == "listening_stats":
+            sp = _spotify_client()
+            if sp is None:
+                return SPOTIFY_AUTH_ERR, None
+            try:
+                kind = args.get("kind")
+                if kind == "recently_played":
+                    items = ((sp.current_user_recently_played(limit=5) or {}).get("items") or [])
+                    if not items:
+                        return "No recently played tracks found.", None
+                    lines = []
+                    for i, it in enumerate(items, 1):
+                        t = it.get("track") or {}
+                        artist = t["artists"][0]["name"] if t.get("artists") else "unknown"
+                        lines.append("{}. {} — {}".format(i, t.get("name", "?"), artist))
+                    return "Recently played:\n" + "\n".join(lines), None
+                if kind == "top_artists":
+                    items = ((sp.current_user_top_artists(limit=5, time_range="medium_term") or {}).get("items") or [])
+                    if not items:
+                        return "No top artist data yet.", None
+                    lines = ["{}. {}".format(i, a.get("name", "?"))
+                             for i, a in enumerate(items, 1)]
+                    return "Top artists:\n" + "\n".join(lines), None
+                if kind == "top_tracks":
+                    items = ((sp.current_user_top_tracks(limit=5, time_range="medium_term") or {}).get("items") or [])
+                    if not items:
+                        return "No top track data yet.", None
+                    lines = []
+                    for i, t in enumerate(items, 1):
+                        artist = t["artists"][0]["name"] if t.get("artists") else "unknown"
+                        lines.append("{}. {} — {}".format(i, t.get("name", "?"), artist))
+                    return "Top tracks:\n" + "\n".join(lines), None
+                return "ERROR: unknown listening_stats kind: {}".format(kind), None
             except Exception as e:
                 log_err("spotify error: {}".format(e))
                 return "ERROR: Spotify playback failed: {}".format(e), None
