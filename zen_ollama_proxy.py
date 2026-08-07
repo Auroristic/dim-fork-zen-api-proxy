@@ -634,9 +634,10 @@ def _queue_followups(sp, kind, current_uri, artist_id=None):
     Returns the count queued; never raises (fire-and-forget)."""
     try:
         queue = (sp.queue() or {}).get("queue") or []
-        if queue:
+        upcoming = [t for t in queue if t.get("uri") and t.get("uri") != current_uri]
+        if upcoming:
             return 0
-        seen = {t.get("uri") for t in queue if t.get("uri")}
+        seen = {t.get("uri") for t in upcoming if t.get("uri")}
         if kind == "artist":
             if not artist_id:
                 return 0
@@ -668,12 +669,12 @@ def _queue_followups(sp, kind, current_uri, artist_id=None):
 
 
 def _clear_stuck_repeat(sp):
-    """If repeat_state is 'track' after single-track playback, turn repeat off.
-    Returns a note string or ''; never raises."""
+    """If repeat_state is 'track' or 'context' after single-track playback, turn
+    repeat off (either one loops a one-track context). Returns a note or ''."""
     try:
-        if ((sp.current_playback() or {}).get("repeat_state")) == "track":
+        if ((sp.current_playback() or {}).get("repeat_state")) in ("track", "context"):
             sp.repeat("off")
-            return " (repeat was stuck on track — turned it off)"
+            return " (repeat was stuck — turned it off)"
     except Exception as e:
         log_err("spotify error: {}".format(e))
     return ""
