@@ -6,7 +6,6 @@ SERVICE="zen-ollama-proxy"
 REPO_DIR="$HOME/dim-fork-zen-api-proxy"
 SYSTEMD_DIR="$HOME/.config/systemd/user"
 FEAT_REPO=0
-FEAT_LINGER=0
 # ── /CONFIG ──
 
 PUR="\033[1;35m"; YEL="\033[1;33m"; GRN="\033[1;32m"; CYN="\033[1;36m"; R="\033[1;31m"; RST="\033[0m"
@@ -35,14 +34,12 @@ checkbox_menu() {
     while true; do
         printf "${PUR}┌ ◈ Optional removals — type a number to toggle, d when done${RST}\n"
         printf "│ ${CYN}[1]${RST} [%s] Delete repo directory (contains .env API keys + reminders.json)\n" "$(feat_mark "$FEAT_REPO")"
-        printf "│ ${CYN}[2]${RST} [%s] Disable linger for this user\n" "$(feat_mark "$FEAT_LINGER")"
         printf "└ ${CYN}Choice: ${RST}"
         read -r choice || choice="d"
         case "$choice" in
             1) [ "$FEAT_REPO" = 1 ] && FEAT_REPO=0 || FEAT_REPO=1 ;;
-            2) [ "$FEAT_LINGER" = 1 ] && FEAT_LINGER=0 || FEAT_LINGER=1 ;;
             d|D) break ;;
-            *) printf "│ ${YEL}Invalid choice — enter 1-2 to toggle, d when done${RST}\n" ;;
+            *) printf "│ ${YEL}Invalid choice — enter 1 to toggle, d when done${RST}\n" ;;
         esac
     done
 }
@@ -71,11 +68,6 @@ if [ -d "$REPO_DIR" ]; then
     sec_line "repo directory present: $REPO_DIR"
 else
     sec_line "repo directory absent: $REPO_DIR"
-fi
-if [ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null || true)" = "1" ] || [ -f "/var/lib/systemd/linger/$USER" ]; then
-    sec_line "linger is enabled for $USER"
-else
-    sec_line "linger is not enabled for $USER"
 fi
 sec_ok "Detection complete"
 
@@ -106,13 +98,6 @@ systemctl --user reset-failed "$SERVICE.service" || true
 if [ "$FEAT_REPO" = 1 ]; then
     rm -rf "$REPO_DIR" || true
     sec_line "Removed $REPO_DIR (.env API keys and reminders.json deleted)."
-fi
-if [ "$FEAT_LINGER" = 1 ]; then
-    if loginctl disable-linger "$USER" 2>/dev/null; then
-        sec_line "Linger disabled for $USER."
-    else
-        sec_note "Could not disable linger — remove /var/lib/systemd/linger/$USER manually."
-    fi
 fi
 sec_ok "Removal done"
 

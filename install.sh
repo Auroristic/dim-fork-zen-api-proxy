@@ -14,7 +14,6 @@ PKG_NOTIFY_DNF="libnotify"
 PKG_NOTIFY_PACMAN="libnotify"
 FEAT_NOTIFY=1
 FEAT_TAVILY=0
-FEAT_LINGER=1
 FEAT_PATH=1
 # ── /CONFIG ──
 
@@ -45,17 +44,15 @@ checkbox_menu() {
         printf "${PUR}┌ ◈ Optional features — type a number to toggle, d when done${RST}\n"
         printf "│ ${CYN}[1]${RST} [%s] Desktop notifications (install libnotify-bin if missing)\n" "$(feat_mark "$FEAT_NOTIFY")"
         printf "│ ${CYN}[2]${RST} [%s] Tavily API key for web_search\n" "$(feat_mark "$FEAT_TAVILY")"
-        printf "│ ${CYN}[3]${RST} [%s] Survive reboots (loginctl enable-linger)\n" "$(feat_mark "$FEAT_LINGER")"
-        printf "│ ${CYN}[4]${RST} [%s] Auto-restart on git pull (.path unit)\n" "$(feat_mark "$FEAT_PATH")"
+        printf "│ ${CYN}[3]${RST} [%s] Auto-restart on git pull (.path unit)\n" "$(feat_mark "$FEAT_PATH")"
         printf "└ ${CYN}Choice: ${RST}"
         read -r choice || choice="d"
         case "$choice" in
             1) [ "$FEAT_NOTIFY" = 1 ] && FEAT_NOTIFY=0 || FEAT_NOTIFY=1 ;;
             2) [ "$FEAT_TAVILY" = 1 ] && FEAT_TAVILY=0 || FEAT_TAVILY=1 ;;
-            3) [ "$FEAT_LINGER" = 1 ] && FEAT_LINGER=0 || FEAT_LINGER=1 ;;
-            4) [ "$FEAT_PATH" = 1 ] && FEAT_PATH=0 || FEAT_PATH=1 ;;
+            3) [ "$FEAT_PATH" = 1 ] && FEAT_PATH=0 || FEAT_PATH=1 ;;
             d|D) break ;;
-            *) printf "│ ${YEL}Invalid choice — enter 1-4 to toggle, d when done${RST}\n" ;;
+            *) printf "│ ${YEL}Invalid choice — enter 1-3 to toggle, d when done${RST}\n" ;;
         esac
     done
 }
@@ -133,18 +130,6 @@ else
     sec_note "Skipped — desktop notifications/reminders will not work without notify-send."
 fi
 sec_ok "Notifications setup"
-
-sec_open "Linger (survive reboots without login)"
-if [ "$FEAT_LINGER" = 1 ]; then
-    if command -v loginctl >/dev/null 2>&1 && loginctl enable-linger "$USER" 2>/dev/null; then
-        sec_line "Linger enabled for $USER."
-    else
-        sec_note "Could not enable linger — the service will still start when you log in."
-    fi
-else
-    sec_line "Skipping linger."
-fi
-sec_ok "Linger handled"
 
 sec_open "Repository setup"
 if [ ! -d "$REPO_DIR" ]; then
