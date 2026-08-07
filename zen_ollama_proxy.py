@@ -196,6 +196,26 @@ OUR_TOOLS = [
         "parameters": {"type": "object", "properties": {
             "id": {"type": "string", "description": "Reminder id, e.g. '1754612345678-ab12'."}},
             "required": ["id"]}}},
+    {"type": "function", "function": {
+        "name": "save_memory",
+        "description": "Save a fact about the user to long-term memory (persisted in "
+                       "memories.json, injected into every future request). Use when the user "
+                       "says things like 'remember that I like dark roast', 'my name is retro', "
+                       "'always respond sarcastically', or 'keep in mind that I use Hyprland'.",
+        "parameters": {"type": "object", "properties": {
+            "content": {"type": "string", "description": "The fact or preference to remember."},
+            "category": {"type": "string", "description": "Optional category, e.g. 'preferences', 'identity' (defaults to 'general')."}},
+            "required": ["content"]}}},
+    {"type": "function", "function": {
+        "name": "list_memories",
+        "description": "List all saved long-term memories with their id, category, content, and creation time.",
+        "parameters": {"type": "object", "properties": {}, "required": []}}},
+    {"type": "function", "function": {
+        "name": "delete_memory",
+        "description": "Delete a long-term memory by id (get ids from list_memories).",
+        "parameters": {"type": "object", "properties": {
+            "id": {"type": "string", "description": "Memory id, e.g. '1754612345678-ab12'."}},
+            "required": ["id"]}}},
 ]
 EXECUTABLE_TOOLS = {t["function"]["name"] for t in OUR_TOOLS}
 
@@ -347,6 +367,45 @@ def _check_approval(tool, args, messages):
 
 _REMINDER_LOCK = threading.Lock()
 _ACTIVE_TIMERS = {}
+_MEMORIES_LOCK = threading.Lock()
+
+
+def _memories_path():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "memories.json")
+
+
+def _read_memories():
+    try:
+        with open(_memories_path(), encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def _write_memories(items):
+    try:
+        with open(_memories_path(), "w", encoding="utf-8") as f:
+            json.dump(items, f, indent=2)
+    except OSError as e:
+        log_err("failed to write memories.json: {}".format(e))
+
+
+def _add_memory(entry):
+    with _MEMORIES_LOCK:
+        items = _read_memories()
+        items.append(entry)
+        _write_memories(items)
+
+
+def _remove_memory(mid):
+    with _MEMORIES_LOCK:
+        items = _read_memories()
+        remaining = [i for i in items if i.get("id") != mid]
+        if len(remaining) == len(items):
+            return False
+        _write_memories(remaining)
+        return True
 
 
 def _reminders_path():
@@ -689,6 +748,33 @@ def _execute_tool(name, args, zen_model, messages=None):
             timer.cancel()
             _remove_reminder(rid)
             return "Cancelled.", None
+        if name == "save_memory":
+            content = str(args.get("content", "")).strip()
+            if not content:
+                return "ERROR: save_memory requires a 'content'", None
+            category = str(args.get("category", "general")).strip() or "general"
+            entry = {"id": "{}-{:04x}".format(int(time.time() * 1000), random.getrandbits(16)),
+                     "category": category, "content": content, "created_at": time.time()}
+            _add_memory(entry)
+            return 'Saved to long-term memory: [{}] {}'.format(category, content), None
+        if name == "list_memories":
+            with _MEMORIES_LOCK:
+                memories = _read_memories()
+            if not memories:
+                return "No memories saved yet.", None
+            lines = ["Saved memories:"]
+            for n, m in enumerate(memories, 1):
+                dt = datetime.fromtimestamp(float(m.get("created_at", 0)))
+                lines.append("[{}] {} | [{}] | {} | {:%Y-%m-%d %H:%M:%S}".format(
+                    n, m.get("id", "?"), m.get("category", "?"), m.get("content", ""), dt))
+            return "\n".join(lines), None
+        if name == "delete_memory":
+            mid = str(args.get("id", "")).strip()
+            if not mid:
+                return "ERROR: delete_memory requires an 'id'", None
+            if _remove_memory(mid):
+                return "Deleted.", None
+            return "Not found.", None
         if name == "write_file":
             path = os.path.expanduser(str(args.get("path", "")))
             content = str(args.get("content", ""))
@@ -931,6 +1017,16 @@ class ProxyHandler(BaseHTTPRequestHandler):
             "role": "system", "type": "message",
             "content": "Current local date and time: {:%Y-%m-%d %H:%M:%S %A} — use this to "
                        "compute 'at_time' and 'delay_seconds' for set_reminder.".format(datetime.now())})
+        with _MEMORIES_LOCK:
+            memories = _read_memories()
+        if memories:
+            lines = ["[LONG-TERM MEMORY]",
+                     "You know the following about the user:"]
+            lines += ["- [{}]: {}".format(m.get("category", "general"),
+                                          m.get("content", "")) for m in memories]
+            zen_payload["messages"].insert(1, {
+                "role": "system", "type": "message",
+                "content": "\n".join(lines)})
         zen_payload["tools"] = OUR_TOOLS
         if payload.get("stream", True):
             self._zen_chat_stream(zen_payload)
