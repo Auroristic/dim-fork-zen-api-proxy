@@ -6,17 +6,19 @@ agentic tools.*
 An Ollama-API-compatible proxy that exposes OpenCode Zen's free-tier models as
 local Ollama models, plus a small set of server-side agentic tools.
 
-It was built for the Caelestia shell "AI Assistant" sidebar panel, which talks
+It was built for the **dim-ghub fork of Caelestia shell** "AI Assistant"
+sidebar panel, which talks
 to `localhost:11434` expecting Ollama's API shape (`/api/tags`, `/api/chat`,
 `/api/generate`) — with zero changes to the panel. Any Ollama-API-compatible
 client can use it the same way.
 
-The AI Assistant sidebar panel is specific to the **dim-ghub fork of
-caelestia-shell** — vanilla upstream caelestia-shell may not include it.
+The AI Assistant sidebar panel is specific to the
+**[dim-ghub/caelestia-shell](https://github.com/dim-ghub/caelestia-shell)**
+fork — vanilla upstream caelestia-shell may not include it.
 
 Tool-calling runs **inside the proxy** (execute → append result → re-request
 the model) because the panel's own tool-calling did not play well with the free
-models. The proxy exposes a fixed 7-tool set instead.
+models. The proxy exposes a fixed 14-tool set instead.
 
 ## Quick start
 
@@ -41,7 +43,10 @@ Full setup details in the sections below.
   - `jq` — parses `hyprctl` output for the capture geometry
   - `imagemagick` — converts/resizes the capture to JPEG (`magick`)
   - `wl-clipboard` (`wl-paste`/`wl-copy`) or `xclip` — clipboard tools
+  - `libnotify-bin` (`notify-send`) — desktop notifications
   - `bash`, `procps` (`free`), `coreutils` (`ls`, `df`) — shell/system info
+- Optional: a Tavily API key (`TAVILY_API_KEY`) for the `web_search` tool
+  (free at tavily.com, 1,000 searches/month, recurring)
 - Note: `take_screenshot` assumes Hyprland (uses `hyprctl` for monitor
   geometry). Other compositors need a modified capture command.
 
@@ -71,7 +76,7 @@ Default ports: proxy listens on **127.0.0.1:11434**; the local Ollama fallback
 is expected on **127.0.0.1:11435** (start it as your own user, e.g.
 `ollama serve` with `OLLAMA_HOST=127.0.0.1:11435`).
 
-Point your client at the proxy. For Caelestia shell specifically, the key
+Point your client at the proxy. For the dim-ghub Caelestia shell specifically, the key
 `ai.ollamaUrl` in `~/.config/caelestia/shell.json` is what the shell's
 `AiConfig` reads — defaults already point at `http://localhost:11434`, so
 usually nothing needs changing; only set it if you run the proxy on another
@@ -121,6 +126,7 @@ The proxy loads `~/.env` itself, so the unit needs no `EnvironmentFile`.
 | Variable | Default | Description |
 |---|---|---|
 | `ZEN_API_KEY` | *(unset)* | OpenCode Zen bearer token; unset → local models only |
+| `TAVILY_API_KEY` | *(unset)* | Optional Tavily key for `web_search` (tavily.com); unset → web_search returns "unavailable" |
 | `PROXY_PORT` | `11434` | Port the proxy listens on |
 | `LOCAL_OLLAMA_URL` | `http://127.0.0.1:11435` | Local Ollama to merge/fall back to |
 | `ZEN_BASE` | `https://opencode.ai/zen/v1` | Zen API base URL |
@@ -144,6 +150,20 @@ server-side (up to 4 tool rounds per request; results truncated to 8000 chars):
 | `set_clipboard` | Replaces clipboard with given text |
 | `list_directory` | `ls -la` of a path (`~` expanded) |
 | `get_system_info` | CPU %, memory, disk usage |
+| `web_search` | Web search (Tavily API), top 5 results with titles/URLs/snippets; requires `TAVILY_API_KEY` |
+| `read_file` | Reads a text file (`~` expanded); refuses binary files, truncates at 8000 chars |
+| `describe_image` | Loads any image file and attaches it for vision models (same channel as screenshots); 10 MB cap |
+| `search_files` | Case-insensitive name search in a directory (depth ≤ 20, max 50 results) |
+| `notify` | Desktop notification (title + message) via `notify-send` |
+| `write_file` | Writes text to a file — **requires user confirmation** (see below) |
+| `open_application` | Launches an app by name (no args) — **requires user confirmation** (see below) |
+
+**Confirmation gate:** `write_file` and `open_application` never execute
+directly. The proxy issues a one-time 6-char token; the model asks you to reply
+with `confirm <TOKEN>` in chat, and only the next call matching that exact
+action (same path/content or app) executes. Tokens expire after 15 minutes.
+`write_file` additionally hard-refuses system directories (`/etc`, `/usr`,
+`/boot`, ...) and protected files (the proxy script, `.env`).
 
 Vision: **only MiMo (`mimo-v2.5-free`) is vision-capable** among the free
 models (verified live against the Zen API). `take_screenshot` attaches the
@@ -165,8 +185,13 @@ explicitly tells the model it cannot see the image and must not guess.
 - The shell-command blocklist (recursive `rm`, `mkfs`, `dd if=`, fork bombs,
   remote-script-to-shell piping) is a **basic safety net, not a security
   boundary**. The proxy will happily run any other command the model requests.
-- Tool execution has **no per-call human confirmation** — models act as
-  instructed within the tool loop.
+- Tool execution has **no per-call human confirmation** for most tools —
+  models act as instructed within the tool loop. Exceptions: `write_file` and
+  `open_application` require a chat-based confirmation token.
+- `web_search` needs a Tavily API key; without one it returns an explicit
+  "unavailable" message.
+- `read_file` is text-only (binary files are refused); `describe_image` only
+  attaches images for vision-capable models (MiMo among the free ones).
 - Clipboard contents are sent to the model by design (tool results); they are
   redacted from the proxy's own failure logs.
 - `take_screenshot` is Hyprland-specific; other compositors need a modified

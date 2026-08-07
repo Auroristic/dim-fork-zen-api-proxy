@@ -20,8 +20,10 @@ import base64
 import copy
 import json
 import os
+import random
 import re
 import shutil
+import string
 import subprocess
 import sys
 import time
@@ -58,6 +60,7 @@ LOCAL_OLLAMA_URL = os.environ.get("LOCAL_OLLAMA_URL", "http://127.0.0.1:11435")
 PROXY_PORT = int(os.environ.get("PROXY_PORT", "11434"))
 ZEN_BASE = os.environ.get("ZEN_BASE", "https://opencode.ai/zen/v1")
 ZEN_API_KEY = os.environ.get("ZEN_API_KEY", "")
+TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY", "")
 UPSTREAM_TIMEOUT = 600
 
 VISION_MODEL_HINTS = ("vision", "gemini", "claude", "gpt-5", "gpt-4", "mimo",
@@ -115,6 +118,51 @@ OUR_TOOLS = [
         "name": "get_system_info",
         "description": "Return a read-only summary of the user's system: CPU usage, memory usage, and disk usage.",
         "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {
+        "name": "web_search",
+        "description": "Search the web (Tavily API) and return the top results with titles, URLs and snippets. Requires TAVILY_API_KEY to be configured on the proxy.",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string", "description": "The search query"}},
+            "required": ["query"]}}},
+    {"type": "function", "function": {
+        "name": "read_file",
+        "description": "Read the contents of a text file. Refuses binary files and truncates very long files.",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string", "description": "Path of the text file to read (supports ~)"}},
+            "required": ["path"]}}},
+    {"type": "function", "function": {
+        "name": "describe_image",
+        "description": "Load an image file and attach it for visual analysis if the current model is vision-capable. Use for describing or OCR-ing any existing image file, not just fresh screenshots.",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string", "description": "Path of the image file (jpg, jpeg, png, gif, webp, bmp; supports ~)"}},
+            "required": ["path"]}}},
+    {"type": "function", "function": {
+        "name": "search_files",
+        "description": "Search for files whose names contain a pattern, within a directory (depth-limited, max 50 results).",
+        "parameters": {"type": "object", "properties": {
+            "directory": {"type": "string", "description": "Directory to search (defaults to home; supports ~)"},
+            "pattern": {"type": "string", "description": "Case-insensitive substring to match against file names"}},
+            "required": ["pattern"]}}},
+    {"type": "function", "function": {
+        "name": "notify",
+        "description": "Send a desktop notification (title + message) via notify-send.",
+        "parameters": {"type": "object", "properties": {
+            "title": {"type": "string", "description": "Notification title (optional)"},
+            "message": {"type": "string", "description": "Notification body text"}},
+            "required": ["message"]}}},
+    {"type": "function", "function": {
+        "name": "write_file",
+        "description": "Write text content to a file. NEVER executes without explicit user confirmation — ask the user to confirm first, then use the tool.",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string", "description": "Destination path (supports ~)"},
+            "content": {"type": "string", "description": "Full text content to write"}},
+            "required": ["path", "content"]}}},
+    {"type": "function", "function": {
+        "name": "open_application",
+        "description": "Launch an application by name (no arguments). NEVER executes without explicit user confirmation — ask the user to confirm first, then use the tool.",
+        "parameters": {"type": "object", "properties": {
+            "app": {"type": "string", "description": "Plain application name, e.g. 'firefox' or 'code'"}},
+            "required": ["app"]}}},
 ]
 EXECUTABLE_TOOLS = {t["function"]["name"] for t in OUR_TOOLS}
 
@@ -128,6 +176,16 @@ BLOCKED_COMMAND_PATTERNS = [
 
 MAX_TOOL_ROUNDS = 4
 TOOL_OUTPUT_LIMIT = 8000
+
+APPROVAL_TTL = 15 * 60
+APPROVAL_TOKEN_RE = re.compile(r"\bconfirm\s+([A-Z0-9]{6})\b", re.IGNORECASE)
+_APPROVAL_TOKENS = {}
+SYSTEM_DIR_PREFIXES = ("/etc", "/usr", "/boot", "/bin", "/sbin", "/lib",
+                       "/lib64", "/var", "/proc", "/sys", "/dev", "/run", "/root")
+FORBIDDEN_WRITE_FILES = ("zen_ollama_proxy.py", ".env")
+IMAGE_EXT_MIME = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+                  ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp"}
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
 
 def _is_vision(model):
@@ -225,7 +283,36 @@ def _replay_tool_calls(calls):
     return out
 
 
-def _execute_tool(name, args, zen_model):
+def _issue_approval_token(tool, args):
+    token = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
+    _APPROVAL_TOKENS[token] = {"tool": tool, "args": json.dumps(args, sort_keys=True),
+                               "expires": time.time() + APPROVAL_TTL}
+    return token
+
+
+def _check_approval(tool, args, messages):
+    """True only if the user's LAST chat message confirms this exact action
+    with a token we previously issued."""
+    token = None
+    for m in reversed(messages or []):
+        content = m.get("content")
+        if isinstance(content, str) and content.strip():
+            mch = APPROVAL_TOKEN_RE.search(content)
+            token = mch.group(1).upper() if mch else None
+            break
+    if not token:
+        return False
+    entry = _APPROVAL_TOKENS.pop(token, None)
+    if not entry:
+        return False
+    if time.time() > entry["expires"]:
+        return False
+    if entry["tool"] != tool or entry["args"] != json.dumps(args, sort_keys=True):
+        return False
+    return True
+
+
+def _execute_tool(name, args, zen_model, messages=None):
     args = args or {}
     if isinstance(args, str):
         try:
@@ -308,6 +395,169 @@ def _execute_tool(name, args, zen_model):
             parts.append("Memory:\n" + mem)
             parts.append("Disk:\n" + disk)
             return "\n".join(parts), None
+        if name == "web_search":
+            query = str(args.get("query", ""))
+            if not query.strip():
+                return "ERROR: web_search requires a 'query'", None
+            if not TAVILY_API_KEY:
+                return ("ERROR: search unavailable — no TAVILY_API_KEY configured. "
+                        "Get a free key at tavily.com (1,000 searches/month), add "
+                        "TAVILY_API_KEY to ~/.env, then restart the proxy."), None
+            try:
+                req = Request("https://api.tavily.com/search",
+                              data=json.dumps({"query": query, "max_results": 5,
+                                               "search_depth": "basic"}).encode(),
+                              method="POST",
+                              headers={"Content-Type": "application/json",
+                                       "Authorization": "Bearer " + TAVILY_API_KEY,
+                                       "User-Agent": "curl/8.0.0"})
+                with urlopen(req, timeout=30) as resp:
+                    data = json.loads(resp.read())
+                results = (data.get("results") or [])[:5]
+                if not results:
+                    return "No search results for: " + query, None
+                lines = ["Search results for: " + query]
+                for i, r in enumerate(results, 1):
+                    lines.append("{}. {} — {} ({})".format(
+                        i, r.get("title", ""), r.get("url", ""),
+                        (r.get("content") or "").replace("\n", " ")))
+                return "\n".join(lines)[:TOOL_OUTPUT_LIMIT], None
+            except HTTPError as e:
+                return "ERROR: search API error: {}".format(e.code), None
+            except Exception as e:
+                return "ERROR: search failed: {}".format(e), None
+        if name == "read_file":
+            path = os.path.expanduser(str(args.get("path", "")))
+            if not path.strip():
+                return "ERROR: read_file requires a 'path'", None
+            if not os.path.isfile(path):
+                return "ERROR: no such file: {}".format(path), None
+            try:
+                with open(path, "rb") as f:
+                    raw = f.read(TOOL_OUTPUT_LIMIT + 1)
+            except OSError as e:
+                return "ERROR: cannot read {}: {}".format(path, e), None
+            if b"\x00" in raw:
+                return ("ERROR: {} appears to be a binary file — read_file only "
+                        "handles text files".format(path)), None
+            try:
+                text = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                return ("ERROR: {} is not valid UTF-8 text — refusing to dump "
+                        "binary content".format(path)), None
+            truncated = len(raw) > TOOL_OUTPUT_LIMIT
+            text = text[:TOOL_OUTPUT_LIMIT]
+            if truncated:
+                text += "\n...[truncated at {} chars]".format(TOOL_OUTPUT_LIMIT)
+            return text, None
+        if name == "describe_image":
+            path = os.path.expanduser(str(args.get("path", "")))
+            if not path.strip():
+                return "ERROR: describe_image requires a 'path'", None
+            if not os.path.isfile(path):
+                return "ERROR: no such image: {}".format(path), None
+            ext = os.path.splitext(path)[1].lower()
+            if ext not in IMAGE_EXT_MIME:
+                return ("ERROR: unsupported image type '{}' (supported: jpg, jpeg, "
+                        "png, gif, webp, bmp)".format(ext or "(none)")), None
+            try:
+                size = os.path.getsize(path)
+            except OSError as e:
+                return "ERROR: cannot stat {}: {}".format(path, e), None
+            if size > MAX_IMAGE_BYTES:
+                return "ERROR: image too large ({} MB, max 10 MB)".format(size // (1024 * 1024)), None
+            if not _is_vision(zen_model):
+                return ("Image loaded from {}. NOTE: you are not vision-capable in "
+                        "this session; you cannot see its contents. Do not describe "
+                        "or guess what's in it — tell the user to use a "
+                        "vision-capable model (MiMo).").format(path), None
+            return "Image loaded from {}".format(path), path
+        if name == "search_files":
+            directory = os.path.expanduser(str(args.get("directory", "")) or "~")
+            pattern = str(args.get("pattern", ""))
+            try:
+                max_depth = min(int(args.get("max_depth", 6) or 6), 20)
+            except (TypeError, ValueError):
+                max_depth = 6
+            if not pattern.strip():
+                return "ERROR: search_files requires a 'pattern'", None
+            if not os.path.isdir(directory):
+                return "ERROR: no such directory: {}".format(directory), None
+            needle = pattern.lower()
+            hits = []
+
+            def _walk(d, depth):
+                if depth > max_depth or len(hits) >= 50:
+                    return
+                try:
+                    entries = sorted(os.listdir(d))
+                except OSError:
+                    return
+                for e in entries:
+                    if len(hits) >= 50:
+                        return
+                    full = os.path.join(d, e)
+                    if needle in e.lower():
+                        hits.append(full)
+                    if os.path.isdir(full) and not os.path.islink(full):
+                        _walk(full, depth + 1)
+
+            _walk(directory, 1)
+            if not hits:
+                return "No files matching '{}' under {}".format(pattern, directory), None
+            return ("{} match(es) under {} (depth <= {}):\n{}".format(
+                len(hits), directory, max_depth, "\n".join(hits[:50])))[:TOOL_OUTPUT_LIMIT], None
+        if name == "notify":
+            title = str(args.get("title", "")) or "Zen proxy"
+            message = str(args.get("message", ""))
+            if not message.strip():
+                return "ERROR: notify requires a 'message'", None
+            if not shutil.which("notify-send"):
+                return "ERROR: notify-send not found (install libnotify-bin)", None
+            ok, out = _run_cmd(["notify-send", "--app-name=Zen proxy", title, message], timeout=15)
+            if not ok:
+                return "ERROR: notification failed: {}".format(out), None
+            return "Notification sent.", None
+        if name == "write_file":
+            path = os.path.expanduser(str(args.get("path", "")))
+            content = str(args.get("content", ""))
+            if not path.strip():
+                return "ERROR: write_file requires a 'path'", None
+            real = os.path.realpath(path)
+            if real == os.path.realpath(__file__) or os.path.basename(real) in FORBIDDEN_WRITE_FILES:
+                return "ERROR: refusing to write to protected file {}".format(real), None
+            if any(real == p or real.startswith(p + "/") for p in SYSTEM_DIR_PREFIXES):
+                return "ERROR: refusing to write to a system directory ({})".format(real), None
+            if not _check_approval("write_file", args, messages):
+                token = _issue_approval_token("write_file", args)
+                return ("ACTION NOT CONFIRMED — I did NOT write '{}'. Ask the user "
+                        "to confirm this exact write by replying with: "
+                        "confirm {}".format(path, token)), None
+            try:
+                os.makedirs(os.path.dirname(real), exist_ok=True)
+                with open(real, "w", encoding="utf-8") as f:
+                    f.write(content)
+                return "Wrote {} bytes to {}".format(len(content.encode("utf-8")), path), None
+            except OSError as e:
+                return "ERROR: failed to write {}: {}".format(path, e), None
+        if name == "open_application":
+            app = str(args.get("app", "")).strip()
+            if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$", app):
+                return ("ERROR: open_application takes a plain application name only "
+                        "(no arguments, no shell metacharacters)"), None
+            if not _check_approval("open_application", args, messages):
+                token = _issue_approval_token("open_application", args)
+                return ("ACTION NOT CONFIRMED — I did NOT launch '{}'. Ask the user "
+                        "to confirm by replying with: confirm {}".format(app, token)), None
+            exe = shutil.which(app)
+            if not exe:
+                return "ERROR: no executable '{}' found in PATH".format(app), None
+            try:
+                subprocess.Popen([exe], start_new_session=True,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return "Launched {}".format(app), None
+            except OSError as e:
+                return "ERROR: failed to launch {}: {}".format(app, e), None
     except Exception as e:
         log_err("tool '{}' crashed: {}".format(name, e))
         return "ERROR: tool execution failed: {}".format(e), None
@@ -624,7 +874,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 for tc in tool_calls:
                     tname = tc["function"]["name"]
                     result_text, image_path = _execute_tool(tname, tc["function"]["arguments"],
-                                                            zen_payload["model"])
+                                                            zen_payload["model"],
+                                                            zen_payload["messages"])
                     log_err(f"tool '{tname}' -> {_redact_secrets(result_text[:120])!r}")
                     content = result_text if isinstance(result_text, str) else json.dumps(result_text)
                     zen_payload["messages"].append(
@@ -700,7 +951,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
             for c in calls:
                 tname = c["function"]["name"]
                 result_text, image_path = _execute_tool(tname, c["function"]["arguments"],
-                                                        zen_payload["model"])
+                                                        zen_payload["model"],
+                                                        zen_payload["messages"])
                 log_err(f"tool '{tname}' -> {_redact_secrets(result_text[:120])!r}")
                 content = result_text if isinstance(result_text, str) else json.dumps(result_text)
                 zen_payload["messages"].append(
