@@ -1,5 +1,8 @@
 # dim-fork-zen-api-proxy
 
+*OpenCode Zen free-tier models as local Ollama models — with server-side
+agentic tools.*
+
 An Ollama-API-compatible proxy that exposes OpenCode Zen's free-tier models as
 local Ollama models, plus a small set of server-side agentic tools.
 
@@ -8,9 +11,22 @@ to `localhost:11434` expecting Ollama's API shape (`/api/tags`, `/api/chat`,
 `/api/generate`) — with zero changes to the panel. Any Ollama-API-compatible
 client can use it the same way.
 
+The AI Assistant sidebar panel is specific to the **dim-ghub fork of
+caelestia-shell** — vanilla upstream caelestia-shell may not include it.
+
 Tool-calling runs **inside the proxy** (execute → append result → re-request
 the model) because the panel's own tool-calling did not play well with the free
 models. The proxy exposes a fixed 7-tool set instead.
+
+## Quick start
+
+```bash
+git clone https://github.com/Auroristic/dim-fork-zen-api-proxy.git && cd dim-fork-zen-api-proxy
+export ZEN_API_KEY="<your-opencode-zen-key>"   # or add it to ~/.env
+python3 zen_ollama_proxy.py
+```
+
+Full setup details in the sections below.
 
 ## Requirements
 
@@ -61,6 +77,12 @@ Point your client at the proxy. For Caelestia shell specifically, the key
 usually nothing needs changing; only set it if you run the proxy on another
 port. `ai.ollamaModel` sets the default model; the models dropdown is served
 by `/api/tags`.
+
+**Important — disable the panel's own tool-calling.** The proxy runs its own
+server-side tool loop, so the panel's built-in tool usage must be switched off
+or the two will conflict (duplicate or broken tool calls). In the panel go to
+**Settings → Panels → Sidebar → AI Assistant** and disable **"Enable tool
+usage"** before using the proxy.
 
 ## Running persistently
 
