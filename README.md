@@ -186,12 +186,14 @@ optional `export ` prefix, optional quotes). **Process environment wins over
 
 For the `play_song` tool:
 
-1. Go to [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard),
+1. Install `spotipy` via your AUR helper: `paru -S python-spotipy` or
+   `yay -S python-spotipy` (or enable the Spotify checkbox in `install.sh`).
+2. Go to [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard),
    create a free app, and set the redirect URI to
-   `http://localhost:8888/callback`.
-2. Add `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` to `.env` (same file
+   `http://127.0.0.1:8888/callback`.
+3. Add `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` to `.env` (same file
    as `ZEN_API_KEY`).
-3. Run
+4. Run
    `python3 ~/dim-fork-zen-api-proxy/zen_ollama_proxy.py --spotify-auth`
    once in your terminal and complete the OAuth flow — the saved token is
    shared with the headless service.

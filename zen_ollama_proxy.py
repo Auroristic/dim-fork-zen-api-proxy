@@ -433,7 +433,7 @@ def _remove_memory(mid):
 
 
 SPOTIFY_SCOPE = "user-modify-playback-state user-read-playback-state user-read-currently-playing"
-SPOTIFY_REDIRECT_URI = "http://localhost:8888/callback"
+SPOTIFY_REDIRECT_URI = "http://127.0.0.1:8888/callback"
 
 
 def _spotify_cache_path():
@@ -453,6 +453,22 @@ def _spotify_client():
     if auth.get_cached_token() is None:
         return None
     return spotipy.Spotify(auth_manager=auth)
+
+
+def _is_no_device_error(e):
+    msg = str(e).lower()
+    return "no active device" in msg or "no_active_device" in msg or "active device" in msg
+
+
+def _launch_spotify():
+    for argv in (["spotify"], ["spotify-launcher"], ["flatpak", "run", "com.spotify.Client"]):
+        try:
+            subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             start_new_session=True)
+            return True
+        except OSError:
+            continue
+    return False
 
 
 def _reminders_path():
@@ -851,9 +867,30 @@ def _execute_tool(name, args, zen_model, messages=None):
                 if not items:
                     return 'No Spotify results for "{}".'.format(query), None
                 track = items[0]
-                sp.start_playback(uris=[track["uri"]])
                 artist = track["artists"][0]["name"] if track.get("artists") else "unknown"
-                return 'Playing {} by {}'.format(track["name"], artist), None
+                label = 'Playing {} by {}'.format(track["name"], artist)
+                try:
+                    sp.start_playback(uris=[track["uri"]])
+                    return label, None
+                except Exception as e:
+                    if not _is_no_device_error(e):
+                        return "ERROR: Spotify playback failed: {}".format(e), None
+                _launch_spotify()
+                try:
+                    for _ in range(12):
+                        time.sleep(0.5)
+                        if any(d.get("is_active") for d in (sp.devices().get("devices") or [])):
+                            break
+                except Exception:
+                    pass
+                try:
+                    sp.start_playback(uris=[track["uri"]])
+                    return label, None
+                except Exception as e:
+                    if _is_no_device_error(e):
+                        return ("Spotify isn't open and couldn't be launched — open it "
+                                "and try again."), None
+                    return "ERROR: Spotify playback failed: {}".format(e), None
             except Exception as e:
                 return "ERROR: Spotify playback failed: {}".format(e), None
         if name == "write_file":

@@ -138,11 +138,15 @@ sec_ok "Notifications setup"
 sec_open "Spotify integration"
 if [ "$FEAT_SPOTIFY" = 1 ]; then
     if python3 -c "import spotipy" >/dev/null 2>&1; then
-        sec_line "spotipy already installed — skipping pip install."
-    elif python3 -m pip install --user spotipy; then
-        sec_line "Installed spotipy (user site-packages)."
+        sec_line "spotipy already installed — skipping."
+    elif command -v paru >/dev/null 2>&1; then
+        paru -S --noconfirm python-spotipy || sec_note "paru install failed — try manually: paru -S python-spotipy"
+        sec_line "Installed python-spotipy via paru."
+    elif command -v yay >/dev/null 2>&1; then
+        yay -S --noconfirm python-spotipy || sec_note "yay install failed — try manually: yay -S python-spotipy"
+        sec_line "Installed python-spotipy via yay."
     else
-        sec_note "pip install spotipy failed — install manually: python3 -m pip install --user spotipy"
+        sec_note "No AUR helper (paru/yay) found — install manually: paru -S python-spotipy"
     fi
 else
     sec_line "Skipped — no Spotify integration."
