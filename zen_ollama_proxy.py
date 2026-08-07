@@ -887,6 +887,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         out = []
         for m in messages:
             m = dict(m)
+            m.setdefault("type", "tool" if m.get("role") == "tool" else "message")
             images = m.pop("images", None) or []
             if images:
                 if is_vision:
