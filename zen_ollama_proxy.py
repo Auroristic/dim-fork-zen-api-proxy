@@ -240,6 +240,12 @@ OUR_TOOLS = [
         "parameters": {"type": "object", "properties": {
             "query": {"type": "string", "description": "Track or song to search for, e.g. 'hate me'."}},
             "required": ["query"]}}},
+    {"type": "function", "function": {
+        "name": "play_liked_song",
+        "description": "Play a random track from the user's Spotify Liked Songs. "
+                       "Use when the user asks things like 'play something from my liked list', "
+                       "'play a random liked song', 'put on something I've liked'.",
+        "parameters": {"type": "object", "properties": {}, "required": []}}},
 ]
 EXECUTABLE_TOOLS = {t["function"]["name"] for t in OUR_TOOLS}
 
@@ -432,7 +438,8 @@ def _remove_memory(mid):
         return True
 
 
-SPOTIFY_SCOPE = "user-modify-playback-state user-read-playback-state user-read-currently-playing"
+SPOTIFY_SCOPE = ("user-modify-playback-state user-read-playback-state "
+                 "user-read-currently-playing user-library-read")
 SPOTIFY_REDIRECT_URI = "http://127.0.0.1:8888/callback"
 
 
@@ -489,6 +496,38 @@ def _play_on_device(sp, device_id, uris):
     except Exception as e:
         log_err("spotify error: {}".format(e))
         return False, "ERROR: Spotify playback failed: {}".format(e)
+
+
+def _play_track_uri(sp, uri):
+    """Device selection + launch + transfer fallback. Returns (True, None) or (False, error)."""
+    try:
+        devices = (sp.devices() or {}).get("devices", [])
+    except Exception as e:
+        log_err("spotify error: {}".format(e))
+        return False, "ERROR: Spotify playback failed: {}".format(e)
+    target = next((d for d in devices if d.get("type") == "Computer"), None)
+    if target is None and devices:
+        target = devices[0]
+    if target is None:
+        _launch_spotify()
+        try:
+            for _ in range(12):
+                time.sleep(0.5)
+                if (sp.devices() or {}).get("devices"):
+                    break
+        except Exception:
+            pass
+        devices = (sp.devices() or {}).get("devices", [])
+        target = next((d for d in devices if d.get("type") == "Computer"), None)
+        if target is None and devices:
+            target = devices[0]
+        if target is None:
+            return False, ("No Spotify devices found — open the Spotify desktop "
+                           "client (logged in) and try again.")
+    ok, err = _play_on_device(sp, target["id"], [uri])
+    if not ok:
+        return False, err
+    return True, None
 
 
 def _reminders_path():
@@ -888,32 +927,38 @@ def _execute_tool(name, args, zen_model, messages=None):
                     return 'No Spotify results for "{}".'.format(query), None
                 track = _pick_track(items, query)
                 artist = track["artists"][0]["name"] if track.get("artists") else "unknown"
-                label = 'Playing {} by {}'.format(track["name"], artist)
-                uri = track["uri"]
-                devices = (sp.devices() or {}).get("devices", [])
-                target = next((d for d in devices if d.get("type") == "Computer"), None)
-                if target is None and devices:
-                    target = devices[0]
-                if target is None:
-                    _launch_spotify()
-                    try:
-                        for _ in range(12):
-                            time.sleep(0.5)
-                            if (sp.devices() or {}).get("devices"):
-                                break
-                    except Exception:
-                        pass
-                    devices = (sp.devices() or {}).get("devices", [])
-                    target = next((d for d in devices if d.get("type") == "Computer"), None)
-                    if target is None and devices:
-                        target = devices[0]
-                    if target is None:
-                        return ("No Spotify devices found — open the Spotify desktop "
-                                "client (logged in) and try again."), None
-                ok, err = _play_on_device(sp, target["id"], [uri])
+                ok, err = _play_track_uri(sp, track["uri"])
                 if not ok:
                     return err, None
-                return label, None
+                return 'Playing {} by {}'.format(track["name"], artist), None
+            except Exception as e:
+                log_err("spotify error: {}".format(e))
+                return "ERROR: Spotify playback failed: {}".format(e), None
+        if name == "play_liked_song":
+            sp = _spotify_client()
+            if sp is None:
+                return ("Spotify not authorized. Please run 'python3 zen_ollama_proxy.py "
+                        "--spotify-auth' in your terminal first."), None
+            try:
+                first = sp.current_user_saved_tracks(limit=1)
+                total = first.get("total", 0)
+                if total <= 0:
+                    return "Your liked songs library is empty.", None
+                track = None
+                for _ in range(3):
+                    offset = random.randrange(total)
+                    page = sp.current_user_saved_tracks(limit=1, offset=offset)
+                    items = page.get("items") or []
+                    track = items[0].get("track") if items else None
+                    if track is not None:
+                        break
+                if track is None:
+                    return "Couldn't find an available liked song — try again.", None
+                artist = track["artists"][0]["name"] if track.get("artists") else "unknown"
+                ok, err = _play_track_uri(sp, track["uri"])
+                if not ok:
+                    return err, None
+                return 'Playing {} by {} from your liked songs 🎲'.format(track["name"], artist), None
             except Exception as e:
                 log_err("spotify error: {}".format(e))
                 return "ERROR: Spotify playback failed: {}".format(e), None

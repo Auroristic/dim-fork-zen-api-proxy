@@ -227,6 +227,7 @@ server-side (up to 4 tool rounds per request; results truncated to 8000 chars):
 | `delete_memory` | Deletes a memory by id |
 | `media_control` | Play/pause/next/prev/status via `playerctl` |
 | `play_song` | Searches and plays a track on Spotify (requires Spotify Setup) |
+| `play_liked_song` | Plays a random track from your Spotify Liked Songs |
 
 **Confirmation gate:** `write_file` and `open_application` never execute
 directly. The proxy issues a one-time 6-char token; the model asks you to reply
