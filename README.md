@@ -18,6 +18,21 @@ fork, vanilla upstream caelestia doesnt include this.
 Tool-calling runs **inside the proxy** (execute → append result → re-request
 the model) The proxy exposes a fixed 14-tool set instead.
 
+## Automated Installation
+
+For a guided, interactive install — prerequisites check, API keys saved to
+`.env`, optional desktop-notification dependency, systemd user service plus
+auto-restart-on-update path unit, and startup verification — just run the
+bundled installer:
+
+```bash
+git clone https://github.com/Auroristic/dim-fork-zen-api-proxy.git && cd dim-fork-zen-api-proxy
+./install.sh
+```
+
+Run it interactively in a terminal (not as root, not via a non-interactive
+pipe). Manual setup instructions continue below.
+
 ## Quick start
 
 ```bash
@@ -249,3 +264,9 @@ explicitly tells the model it cannot see the image and must not guess.
   manually; Zen's `/models` endpoint is not consulted at runtime.
 - Local model fallback expects the Ollama store served by the same user the
   proxy runs as.
+
+## Maintainer notes
+
+- When changing `zen_ollama_proxy.py` (port, env vars, dependencies, tools),
+  update the CONFIG block and feature menu in `install.sh` in the same commit
+  so the installer never drifts.
