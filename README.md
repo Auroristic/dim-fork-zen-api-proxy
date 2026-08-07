@@ -272,3 +272,13 @@ explicitly tells the model it cannot see the image and must not guess.
 - When changing `zen_ollama_proxy.py` (port, env vars, dependencies, tools),
   update the CONFIG block and feature menu in `install.sh` and the CONFIG
   block in `uninstall.sh` in the same commit so the installers never drift.
+
+## 🔮 Planned Tools
+
+- `todo`: Persistent task list
+- `system_stats`: Dedicated CPU/RAM/battery via /proc
+- `clipboard`: Wayland wl-copy/wl-paste integration
+- `screenshot`: grim integration
+- `hyprctl`: Hyprland window/workspace control
+- `weather`: via open-meteo
+- `speak`: TTS via NVIDIA API / piper

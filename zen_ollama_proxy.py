@@ -181,6 +181,21 @@ OUR_TOOLS = [
             "delay_seconds": {"type": "number", "description": "Seconds from now until the reminder fires (for 'in X minutes/hours' requests)."},
             "at_time": {"type": "string", "description": "Full local datetime (ISO 8601, e.g. 2026-08-08T22:00:00) at which to fire (for 'at 10pm' requests)."}},
             "required": ["message"]}}},
+    {"type": "function", "function": {
+        "name": "list_reminders",
+        "description": "List all active reminders with their id, fire time, and message. "
+                       "Use when the user asks things like 'what reminders do I have', "
+                       "'list my reminders', 'show my pending reminders'.",
+        "parameters": {"type": "object", "properties": {}, "required": []}}},
+    {"type": "function", "function": {
+        "name": "cancel_reminder",
+        "description": "Cancel a pending reminder by id (get ids from list_reminders). The "
+                       "reminder will not fire. Use when the user asks things like 'cancel my "
+                       "sleep reminder', 'delete that reminder', 'never mind about the 10pm "
+                       "reminder'. Call list_reminders first if you don't have the id.",
+        "parameters": {"type": "object", "properties": {
+            "id": {"type": "string", "description": "Reminder id, e.g. '1754612345678-ab12'."}},
+            "required": ["id"]}}},
 ]
 EXECUTABLE_TOOLS = {t["function"]["name"] for t in OUR_TOOLS}
 
@@ -331,6 +346,7 @@ def _check_approval(tool, args, messages):
 
 
 _REMINDER_LOCK = threading.Lock()
+_ACTIVE_TIMERS = {}
 
 
 def _reminders_path():
@@ -372,6 +388,8 @@ def _fire_reminder(rid, message):
     if shutil.which("notify-send"):
         _run_cmd(["notify-send", "--app-name=Zen proxy", "Reminder", message], timeout=15)
     _remove_reminder(rid)
+    with _REMINDER_LOCK:
+        _ACTIVE_TIMERS.pop(rid, None)
 
 
 def _reschedule_reminders():
@@ -390,6 +408,8 @@ def _reschedule_reminders():
             timer = threading.Timer(fire_at - now, _fire_reminder, args=(rid, message))
             timer.daemon = True
             timer.start()
+            with _REMINDER_LOCK:
+                _ACTIVE_TIMERS[rid] = timer
             pending.append(item)
     with _REMINDER_LOCK:
         _write_reminders(pending)
@@ -639,12 +659,36 @@ def _execute_tool(name, args, zen_model, messages=None):
                                     _fire_reminder, args=(rid, message))
             timer.daemon = True
             timer.start()
+            with _REMINDER_LOCK:
+                _ACTIVE_TIMERS[rid] = timer
             fire_dt = datetime.fromtimestamp(fire_at)
             if fire_dt.date() == now.date():
                 when = "today at {:%H:%M:%S}".format(fire_dt)
             else:
                 when = "{:%Y-%m-%d %H:%M:%S}".format(fire_dt)
             return 'Reminder set for {} — "{}"'.format(when, message), None
+        if name == "list_reminders":
+            with _REMINDER_LOCK:
+                items = sorted(_read_reminders(), key=lambda i: i.get("fire_at", 0.0))
+            if not items:
+                return "No active reminders.", None
+            lines = ["Active reminders:"]
+            for n, item in enumerate(items, 1):
+                fire_dt = datetime.fromtimestamp(float(item.get("fire_at", 0)))
+                lines.append("[{}] {} | {:%Y-%m-%d %H:%M:%S} | {}".format(
+                    n, item.get("id", "?"), fire_dt, item.get("message", "")))
+            return "\n".join(lines), None
+        if name == "cancel_reminder":
+            rid = str(args.get("id", "")).strip()
+            if not rid:
+                return "ERROR: cancel_reminder requires an 'id'", None
+            with _REMINDER_LOCK:
+                timer = _ACTIVE_TIMERS.pop(rid, None)
+            if timer is None:
+                return "Reminder not found.", None
+            timer.cancel()
+            _remove_reminder(rid)
+            return "Cancelled.", None
         if name == "write_file":
             path = os.path.expanduser(str(args.get("path", "")))
             content = str(args.get("content", ""))
