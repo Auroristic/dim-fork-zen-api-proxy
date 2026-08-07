@@ -1,0 +1,8 @@
+# Stdlib-only: no pip dependencies are required to run this project.
+#
+# System packages used by the tools (Debian/Ubuntu names):
+#   grim jq imagemagick wl-clipboard   (screenshot + clipboard)
+#   xclip                              (clipboard fallback)
+#   procps                             (free, system info)
+#   coreutils                          (ls, df)
+# Note: take_screenshot also needs Hyprland's hyprctl (hyprland package).
