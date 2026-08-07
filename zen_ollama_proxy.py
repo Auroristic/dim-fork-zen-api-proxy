@@ -886,7 +886,7 @@ def _execute_tool(name, args, zen_model, messages=None):
                 items = (results.get("tracks") or {}).get("items") or []
                 if not items:
                     return 'No Spotify results for "{}".'.format(query), None
-                track = items[0]
+                track = _pick_track(items, query)
                 artist = track["artists"][0]["name"] if track.get("artists") else "unknown"
                 label = 'Playing {} by {}'.format(track["name"], artist)
                 uri = track["uri"]
@@ -1002,6 +1002,27 @@ def zen_models():
         return []
 
 
+def _normalize_zen_messages(msgs):
+    """Ensure every message and nested tool_call carries the 'type' field the
+    strict Console provider requires (message/tool/function)."""
+    for m in msgs:
+        m.setdefault("type", "tool" if m.get("role") == "tool" else "message")
+        for tc in m.get("tool_calls") or []:
+            tc.setdefault("type", "function")
+
+
+REMIX_WORDS = ("slowed", "reverb", "sped up", "remix")
+
+
+def _pick_track(items, query):
+    q = query.lower()
+    if not any(w in q for w in REMIX_WORDS):
+        for t in items:
+            if not any(w in (t.get("name") or "").lower() for w in REMIX_WORDS):
+                return t
+    return items[0]
+
+
 class ProxyHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -1115,9 +1136,6 @@ class ProxyHandler(BaseHTTPRequestHandler):
         out = []
         for m in messages:
             m = dict(m)
-            m.setdefault("type", "tool" if m.get("role") == "tool" else "message")
-            for tc in m.get("tool_calls") or []:
-                tc.setdefault("type", "function")
             images = m.pop("images", None) or []
             if images:
                 if is_vision:
@@ -1132,6 +1150,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     text = (m.get("content") or "").strip()
                     m["content"] = note if not text else text + "\n\n" + note
             out.append(m)
+        _normalize_zen_messages(out)
         return out
 
     def _handle_chat(self):
@@ -1179,6 +1198,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
     def _zen_stream_round(self, zen_payload):
         """Open one upstream Zen request. Returns ('ok', upstream) or ('error', (status, detail))."""
+        _normalize_zen_messages(zen_payload["messages"])
         req = Request(ZEN_BASE + "/chat/completions",
                       data=json.dumps(zen_payload).encode(), method="POST",
                       headers={"Content-Type": "application/json",
@@ -1320,6 +1340,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         zen_payload["stream"] = False
         rounds = 0
         while True:
+            _normalize_zen_messages(zen_payload["messages"])
             req = Request(ZEN_BASE + "/chat/completions",
                           data=json.dumps(zen_payload).encode(), method="POST",
                           headers={"Content-Type": "application/json",
