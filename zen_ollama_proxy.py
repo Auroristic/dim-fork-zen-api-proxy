@@ -1008,6 +1008,18 @@ def _execute_tool(name, args, zen_model, messages=None):
                 return "Now playing: {} by {}".format(title.strip(), artist.strip()), None
             ok, out = _run_cmd(["playerctl", "previous" if action == "prev" else action], timeout=10)
             if not ok:
+                if action in ("next", "prev"):
+                    sp = _spotify_client()
+                    if sp is not None:
+                        try:
+                            if action == "next":
+                                sp.next_track()
+                            else:
+                                sp.previous_track()
+                            return "Skipped", None
+                        except Exception as e:
+                            log_err("spotify error: {}".format(e))
+                    return "ERROR: Failed to skip track via playerctl or Spotify API.", None
                 return "ERROR: {}".format(out), None
             return {"play": "Playing", "pause": "Paused",
                     "next": "Skipped", "prev": "Skipped"}[action], None
