@@ -6,25 +6,23 @@ agentic tools.*
 An Ollama-API-compatible proxy that exposes OpenCode Zen's free-tier models as
 local Ollama models, plus a small set of server-side agentic tools.
 
-It was built for the **dim-ghub fork of Caelestia shell** "AI Assistant"
+Built for the **dim-ghub fork of Caelestia shell** "AI Assistant"
 sidebar panel, which talks
 to `localhost:11434` expecting Ollama's API shape (`/api/tags`, `/api/chat`,
-`/api/generate`) — with zero changes to the panel. Any Ollama-API-compatible
-client can use it the same way.
+`/api/generate`), Any Ollama compatible client can use this, no changes to the sidebar.
 
-The AI Assistant sidebar panel is specific to the
+specific to
 **[dim-ghub/caelestia-shell](https://github.com/dim-ghub/caelestia-shell)**
-fork — vanilla upstream caelestia-shell may not include it.
+fork, vanilla upstream caelestia doesnt include this.
 
 Tool-calling runs **inside the proxy** (execute → append result → re-request
-the model) because the panel's own tool-calling did not play well with the free
-models. The proxy exposes a fixed 14-tool set instead.
+the model) The proxy exposes a fixed 14-tool set instead.
 
 ## Quick start
 
 ```bash
 git clone https://github.com/Auroristic/dim-fork-zen-api-proxy.git && cd dim-fork-zen-api-proxy
-export ZEN_API_KEY="<your-opencode-zen-key>"   # or add it to ~/.env
+export ZEN_API_KEY="<your-opencode-zen-key>"   # or add it to ~/.env (/home/user/.env)
 python3 zen_ollama_proxy.py
 ```
 
@@ -66,8 +64,10 @@ python3 zen_ollama_proxy.py                  # stdlib only, nothing to install
 curl http://localhost:11434/api/tags
 ```
 
-A healthy response lists your local Ollama models plus the Zen free models
-(short display names like `V4 Flash`, `MiMo`, `Nemotron`). Warning signs:
+This should list your local Ollama models plus the Zen free models
+(short display names like `V4 Flash`, `MiMo`, `Nemotron`). 
+
+Warning signs:
 
 - Free models missing → `ZEN_API_KEY` wasn't picked up (check `~/.env` or the export).
 - `"models": []` → no key *and* the local Ollama fallback on 11435 isn't reachable.
@@ -245,8 +245,6 @@ explicitly tells the model it cannot see the image and must not guess.
 
 ## TODO / known rough edges
 
-- No image search capability yet; planned tools: `web_search`,
-  `describe_image`, etc.
 - `BROKEN_FREE_MODELS` and the free-model display list are maintained
   manually; Zen's `/models` endpoint is not consulted at runtime.
 - Local model fallback expects the Ollama store served by the same user the
