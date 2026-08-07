@@ -46,7 +46,7 @@ Full setup details in the sections below.
   - `libnotify-bin` (`notify-send`) — desktop notifications
   - `bash`, `procps` (`free`), `coreutils` (`ls`, `df`) — shell/system info
 - Optional: a Tavily API key (`TAVILY_API_KEY`) for the `web_search` tool
-  (free at tavily.com, 1,000 searches/month, recurring)
+  (sign up / get a key at https://tavily.com — 1,000 searches/month, no card)
 - Note: `take_screenshot` assumes Hyprland (uses `hyprctl` for monitor
   geometry). Other compositors need a modified capture command.
 
@@ -153,7 +153,7 @@ To verify: `touch ~/dim-fork-zen-api-proxy/zen_ollama_proxy.py` (or do a real
 | Variable | Default | Description |
 |---|---|---|
 | `ZEN_API_KEY` | *(unset)* | OpenCode Zen bearer token; unset → local models only |
-| `TAVILY_API_KEY` | *(unset)* | Optional Tavily key for `web_search` (tavily.com); unset → web_search returns "unavailable" |
+| `TAVILY_API_KEY` | *(unset)* | Optional Tavily key for `web_search`; get a free key at [tavily.com](https://tavily.com) (1,000 searches/month, no card); unset → web_search returns "unavailable" |
 | `PROXY_PORT` | `11434` | Port the proxy listens on |
 | `LOCAL_OLLAMA_URL` | `http://127.0.0.1:11435` | Local Ollama to merge/fall back to |
 | `ZEN_BASE` | `https://opencode.ai/zen/v1` | Zen API base URL |
