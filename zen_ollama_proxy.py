@@ -633,8 +633,10 @@ def _queue_followups(sp, kind, current_uri, artist_id=None):
     """Auto-queue up to 4 follow-up tracks after single-track playback.
     Returns the count queued; never raises (fire-and-forget)."""
     try:
-        if (sp.queue() or {}).get("queue"):
+        queue = (sp.queue() or {}).get("queue") or []
+        if queue:
             return 0
+        seen = {t.get("uri") for t in queue if t.get("uri")}
         if kind == "artist":
             if not artist_id:
                 return 0
@@ -652,16 +654,29 @@ def _queue_followups(sp, kind, current_uri, artist_id=None):
             return 0
         count = 0
         for uri in candidates:
-            if not uri or uri == current_uri:
+            if not uri or uri == current_uri or uri in seen:
                 continue
-            if count >= 4:
-                break
+            seen.add(uri)
             sp.add_to_queue(uri)
             count += 1
+            if count >= 4:
+                break
         return count
     except Exception as e:
         log_err("spotify error: {}".format(e))
         return 0
+
+
+def _clear_stuck_repeat(sp):
+    """If repeat_state is 'track' after single-track playback, turn repeat off.
+    Returns a note string or ''; never raises."""
+    try:
+        if ((sp.current_playback() or {}).get("repeat_state")) == "track":
+            sp.repeat("off")
+            return " (repeat was stuck on track — turned it off)"
+    except Exception as e:
+        log_err("spotify error: {}".format(e))
+    return ""
 
 
 def _reminders_path():
@@ -1075,9 +1090,11 @@ def _execute_tool(name, args, zen_model, messages=None):
                 ok, err = _play_uri(sp, uris=[track["uri"]])
                 if not ok:
                     return err, None
+                repeat_note = _clear_stuck_repeat(sp)
                 artist_id = track["artists"][0]["id"] if track.get("artists") else None
                 queued = _queue_followups(sp, "artist", track["uri"], artist_id=artist_id)
                 reply = 'Playing {} by {}'.format(track["name"], artist)
+                reply += repeat_note
                 if queued > 0:
                     reply += " (+{} more queued)".format(queued)
                 return reply, None
@@ -1107,8 +1124,10 @@ def _execute_tool(name, args, zen_model, messages=None):
                 ok, err = _play_uri(sp, uris=[track["uri"]])
                 if not ok:
                     return err, None
+                repeat_note = _clear_stuck_repeat(sp)
                 queued = _queue_followups(sp, "liked", track["uri"])
                 reply = 'Playing {} by {} from your liked songs 🎲'.format(track["name"], artist)
+                reply += repeat_note
                 if queued > 0:
                     reply += " (+{} more queued)".format(queued)
                 return reply, None
