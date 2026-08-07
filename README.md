@@ -18,6 +18,7 @@ models. The proxy exposes a fixed 7-tool set instead.
 - Optional: a local Ollama instance for the local-model fallback passthrough
   (the proxy's `/api/tags` merges local + Zen models)
 - An OpenCode Zen API key (`ZEN_API_KEY`), needed for any Zen model
+  (sign up / get a key at https://opencode.ai/auth)
 - Linux desktop utilities used by the tools (exact package names):
   - `grim` — screen capture (Wayland)
   - `hyprctl` — Hyprland compositor, used to locate the focused monitor
@@ -31,19 +32,67 @@ models. The proxy exposes a fixed 7-tool set instead.
 ## Installation
 
 ```bash
-git clone <repo-url> && cd dim-fork-zen-api-proxy
+git clone https://github.com/Auroristic/dim-fork-zen-api-proxy.git && cd dim-fork-zen-api-proxy
 # set the API key (either way):
 export ZEN_API_KEY="your-opencode-zen-key"
 # or create ~/.env with:  ZEN_API_KEY="<your-opencode-zen-key>"
 python3 zen_ollama_proxy.py                  # stdlib only, nothing to install
 ```
 
+**Verify it's running:**
+
+```bash
+curl http://localhost:11434/api/tags
+```
+
+A healthy response lists your local Ollama models plus the Zen free models
+(short display names like `V4 Flash`, `MiMo`, `Nemotron`). Warning signs:
+
+- Free models missing → `ZEN_API_KEY` wasn't picked up (check `~/.env` or the export).
+- `"models": []` → no key *and* the local Ollama fallback on 11435 isn't reachable.
+
 Default ports: proxy listens on **127.0.0.1:11434**; the local Ollama fallback
 is expected on **127.0.0.1:11435** (start it as your own user, e.g.
 `ollama serve` with `OLLAMA_HOST=127.0.0.1:11435`).
 
-Point your client at the proxy (for Caelestia: set the panel's base URL/model
-list to `localhost:11434` — the models dropdown is served by `/api/tags`).
+Point your client at the proxy. For Caelestia shell specifically, the key
+`ai.ollamaUrl` in `~/.config/caelestia/shell.json` is what the shell's
+`AiConfig` reads — defaults already point at `http://localhost:11434`, so
+usually nothing needs changing; only set it if you run the proxy on another
+port. `ai.ollamaModel` sets the default model; the models dropdown is served
+by `/api/tags`.
+
+## Running persistently
+
+Keep it alive without a terminal — either background it:
+
+```bash
+nohup python3 zen_ollama_proxy.py >/tmp/zen-ollama-proxy.log 2>&1 &
+```
+
+or use a user-level systemd unit at `~/.config/systemd/user/zen-ollama-proxy.service`:
+
+```ini
+[Unit]
+Description=OpenCode Zen to Ollama proxy
+
+[Service]
+ExecStart=/usr/bin/python3 %h/dim-fork-zen-api-proxy/zen_ollama_proxy.py
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+```
+
+(`%h` is your home directory — this `ExecStart` assumes the repo was cloned
+directly into `$HOME`; adjust the path if you cloned it elsewhere.)
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now zen-ollama-proxy
+```
+
+The proxy loads `~/.env` itself, so the unit needs no `EnvironmentFile`.
 
 ## Configuration (env vars)
 
