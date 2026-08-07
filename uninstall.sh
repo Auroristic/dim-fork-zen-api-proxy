@@ -3,6 +3,7 @@ set -euo pipefail
 
 # ── CONFIG ── keep in sync with zen_ollama_proxy.py (port, env vars, deps) ──
 SERVICE="zen-ollama-proxy"
+RESTARTER="${SERVICE}-restart"
 REPO_DIR="$HOME/dim-fork-zen-api-proxy"
 SYSTEMD_DIR="$HOME/.config/systemd/user"
 FEAT_REPO=0
@@ -64,6 +65,11 @@ if [ -f "$SYSTEMD_DIR/$SERVICE.path" ]; then
 else
     sec_line "unit file absent: $SYSTEMD_DIR/$SERVICE.path"
 fi
+if [ -f "$SYSTEMD_DIR/$RESTARTER.service" ]; then
+    sec_line "unit file present: $SYSTEMD_DIR/$RESTARTER.service"
+else
+    sec_line "unit file absent: $SYSTEMD_DIR/$RESTARTER.service"
+fi
 if [ -d "$REPO_DIR" ]; then
     sec_line "repo directory present: $REPO_DIR"
 else
@@ -91,7 +97,9 @@ systemctl --user disable --now "$SERVICE.service" || true
 sec_line "disabled $SERVICE.service"
 systemctl --user disable --now "$SERVICE.path" || true
 sec_line "disabled $SERVICE.path"
-rm -f "$SYSTEMD_DIR/$SERVICE.service" "$SYSTEMD_DIR/$SERVICE.path" || true
+systemctl --user disable --now "$RESTARTER.service" || true
+sec_line "disabled $RESTARTER.service"
+rm -f "$SYSTEMD_DIR/$SERVICE.service" "$SYSTEMD_DIR/$SERVICE.path" "$SYSTEMD_DIR/$RESTARTER.service" || true
 sec_line "removed unit files"
 systemctl --user daemon-reload || true
 systemctl --user reset-failed "$SERVICE.service" || true
@@ -107,7 +115,7 @@ if systemctl --user is-active --quiet "$SERVICE.service"; then
 else
     sec_line "Service is stopped."
 fi
-if [ -f "$SYSTEMD_DIR/$SERVICE.service" ] || [ -f "$SYSTEMD_DIR/$SERVICE.path" ]; then
+if [ -f "$SYSTEMD_DIR/$SERVICE.service" ] || [ -f "$SYSTEMD_DIR/$SERVICE.path" ] || [ -f "$SYSTEMD_DIR/$RESTARTER.service" ]; then
     sec_note "Unit file(s) still present — remove them manually."
 else
     sec_line "Unit files removed."

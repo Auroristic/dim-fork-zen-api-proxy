@@ -8,6 +8,7 @@ SCRIPT="$REPO_DIR/zen_ollama_proxy.py"
 ENV_FILE="$REPO_DIR/.env"
 SYSTEMD_DIR="$HOME/.config/systemd/user"
 SERVICE="zen-ollama-proxy"
+RESTARTER="${SERVICE}-restart"
 PORT=11434
 PKG_NOTIFY_APT="libnotify-bin"
 PKG_NOTIFY_DNF="libnotify"
@@ -44,7 +45,7 @@ checkbox_menu() {
         printf "${PUR}┌ ◈ Optional features — type a number to toggle, d when done${RST}\n"
         printf "│ ${CYN}[1]${RST} [%s] Desktop notifications (install libnotify-bin if missing)\n" "$(feat_mark "$FEAT_NOTIFY")"
         printf "│ ${CYN}[2]${RST} [%s] Tavily API key for web_search\n" "$(feat_mark "$FEAT_TAVILY")"
-        printf "│ ${CYN}[3]${RST} [%s] Auto-restart on git pull (.path unit)\n" "$(feat_mark "$FEAT_PATH")"
+        printf "│ ${CYN}[3]${RST} [%s] Auto-restart on code changes (.path unit)\n" "$(feat_mark "$FEAT_PATH")"
         printf "└ ${CYN}Choice: ${RST}"
         read -r choice || choice="d"
         case "$choice" in
@@ -182,9 +183,20 @@ WantedBy=default.target
 EOF
 sec_line "Wrote $SYSTEMD_DIR/$SERVICE.service"
 if [ "$FEAT_PATH" = 1 ]; then
+    cat > "$SYSTEMD_DIR/$RESTARTER.service" <<EOF
+[Unit]
+Description=Restart zen-ollama-proxy on code change
+
+[Service]
+Type=oneshot
+Environment="XDG_RUNTIME_DIR=/run/user/%U"
+ExecStart=/usr/bin/systemctl --user restart $SERVICE.service
+EOF
+    sec_line "Wrote $SYSTEMD_DIR/$RESTARTER.service"
     cat > "$SYSTEMD_DIR/$SERVICE.path" <<EOF
 [Path]
 PathModified=$SCRIPT
+Unit=$RESTARTER.service
 
 [Install]
 WantedBy=default.target
@@ -193,6 +205,8 @@ EOF
 else
     rm -f "$SYSTEMD_DIR/$SERVICE.path"
     systemctl --user disable "$SERVICE.path" >/dev/null 2>&1 || true
+    rm -f "$SYSTEMD_DIR/$RESTARTER.service"
+    systemctl --user disable "$RESTARTER.service" >/dev/null 2>&1 || true
     sec_note "Skipped .path unit — auto-restart on updates disabled."
 fi
 systemctl --user daemon-reload
@@ -229,4 +243,4 @@ sec_ok "Install complete"
 printf "❯ ${CYN}Status:${RST}  systemctl --user status $SERVICE\n"
 printf "❯ ${CYN}Logs:${RST}    journalctl --user -u $SERVICE -f\n"
 printf "❯ ${CYN}Restart after editing .env:${RST}  systemctl --user restart $SERVICE\n"
-printf "❯ ${CYN}Auto-restarts on 'git pull' via the .path unit.${RST}\n"
+printf "❯ ${CYN}Auto-restarts on code changes via the .path unit.${RST}\n"
