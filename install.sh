@@ -218,12 +218,14 @@ install -d "$SYSTEMD_DIR"
 cat > "$SYSTEMD_DIR/$SERVICE.service" <<EOF
 [Unit]
 Description=OpenCode Zen to Ollama proxy
+StartLimitIntervalSec=0
 
 [Service]
 Environment="DISPLAY=:0"
 Environment="XDG_RUNTIME_DIR=/run/user/%U"
 ExecStart=$PYTHON $SCRIPT
 Restart=on-failure
+RestartSec=2
 
 [Install]
 WantedBy=default.target
