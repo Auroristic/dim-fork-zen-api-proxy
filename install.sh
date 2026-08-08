@@ -175,6 +175,45 @@ else
 fi
 sec_ok "Spotify setup"
 
+sec_open "Ollama port setup"
+if systemctl is-enabled ollama >/dev/null 2>&1 || [ -f /etc/systemd/system/ollama.service ]; then
+    sec_line "Found system ollama.service — moving it off the proxy port (11434 → 11435)."
+    sec_note "sudo may prompt for your password"
+    if sudo mkdir -p /etc/systemd/system/ollama.service.d \
+        && printf '%s\n' \
+            "# Managed by zen-ollama-proxy install.sh — keeps ollama off the proxy's port" \
+            "[Service]" \
+            "Environment=OLLAMA_HOST=127.0.0.1:11435" \
+        | sudo tee /etc/systemd/system/ollama.service.d/override.conf >/dev/null \
+        && sudo systemctl daemon-reload \
+        && sudo systemctl restart ollama; then
+        sec_line "ollama now listens on 127.0.0.1:11435 — the proxy's port 11434 is free."
+    else
+        sec_note "Could not update ollama automatically. After the install, run:"
+        sec_note "  sudo mkdir -p /etc/systemd/system/ollama.service.d"
+        sec_note "  sudo sh -c 'printf \"[Service]\\nEnvironment=OLLAMA_HOST=127.0.0.1:11435\\n\" > /etc/systemd/system/ollama.service.d/override.conf'"
+        sec_note "  sudo systemctl daemon-reload && sudo systemctl restart ollama"
+        sec_note "Continuing anyway — ollama on 11434 will block the proxy until fixed."
+    fi
+elif systemctl --user is-enabled ollama >/dev/null 2>&1 || [ -f "$HOME/.config/systemd/user/ollama.service" ]; then
+    sec_line "Found user ollama.service — moving it off the proxy port (11434 → 11435)."
+    if mkdir -p "$HOME/.config/systemd/user/ollama.service.d" \
+        && printf '%s\n' \
+            "# Managed by zen-ollama-proxy install.sh — keeps ollama off the proxy's port" \
+            "[Service]" \
+            "Environment=OLLAMA_HOST=127.0.0.1:11435" \
+        > "$HOME/.config/systemd/user/ollama.service.d/override.conf" \
+        && systemctl --user daemon-reload \
+        && systemctl --user restart ollama; then
+        sec_line "ollama now listens on 127.0.0.1:11435 — the proxy's port 11434 is free."
+    else
+        sec_note "Could not update user ollama unit — fix manually: systemctl --user edit ollama"
+    fi
+else
+    sec_line "No ollama service found — skipping."
+fi
+sec_ok "Ollama port setup"
+
 sec_open "Repository setup"
 if [ ! -d "$REPO_DIR" ]; then
     sec_line "Cloning $REPO_URL ..."

@@ -114,6 +114,34 @@ if [ "$FEAT_REPO" = 1 ]; then
     rm -rf "$REPO_DIR" || true
     sec_line "Removed $REPO_DIR (.env API keys, reminders.json, memories.json, and Spotify token cache deleted)."
 fi
+
+sec_open "Ollama override cleanup"
+sys_override="/etc/systemd/system/ollama.service.d/override.conf"
+usr_override="$HOME/.config/systemd/user/ollama.service.d/override.conf"
+if [ -f "$sys_override" ] && grep -q "Managed by zen-ollama-proxy" "$sys_override"; then
+    sec_note "sudo may prompt for your password"
+    if sudo rm -f "$sys_override" \
+        && sudo rmdir --ignore-fail-on-non-empty /etc/systemd/system/ollama.service.d 2>/dev/null \
+        && sudo systemctl daemon-reload \
+        && sudo systemctl restart ollama; then
+        sec_line "Removed system ollama override — ollama back on its default port (11434)."
+    else
+        sec_note "Could not remove system ollama override — do it manually: sudo rm -f $sys_override"
+    fi
+elif [ -f "$usr_override" ] && grep -q "Managed by zen-ollama-proxy" "$usr_override"; then
+    if rm -f "$usr_override" \
+        && rmdir --ignore-fail-on-non-empty "$HOME/.config/systemd/user/ollama.service.d" 2>/dev/null \
+        && systemctl --user daemon-reload \
+        && systemctl --user restart ollama; then
+        sec_line "Removed user ollama override — ollama back on its default port (11434)."
+    else
+        sec_note "Could not remove user ollama override — do it manually: rm -f $usr_override"
+    fi
+else
+    sec_line "No managed ollama override found — skipping."
+fi
+sec_ok "Ollama override cleanup"
+
 sec_ok "Removal done"
 
 sec_open "Verifying..."
